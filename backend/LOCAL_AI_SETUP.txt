@@ -1,0 +1,22 @@
+LOCAL FASHN VTON SETUP
+
+1) Clone the upstream repository beside saree-mirror:
+   cd "E:\fitting 2"
+   git clone https://github.com/fashn-AI/fashn-vton-1.5.git
+
+2) Activate this backend environment:
+   cd "E:\fitting 2\saree-mirror\backend"
+   .venv\Scripts\Activate.ps1
+
+3) Install the local model package into this environment:
+   pip install -e "..\..\fashn-vton-1.5"
+
+4) Download weights using the model repository's own Python environment/dependencies (same backend environment is simplest):
+   cd "E:\fitting 2\fashn-vton-1.5"
+   python scripts\download_weights.py --weights-dir .\weights
+
+5) Copy .env.example to .env in backend. No API key is required.
+
+6) Start backend and check http://127.0.0.1:8000/api/health.
+
+Saree warning: local FASHN VTON supports tops, bottoms, one-pieces only. This integration uses one-pieces + flat-lay as an experimental approximation, not dedicated saree draping.
