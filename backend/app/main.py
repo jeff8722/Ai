@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
@@ -8,6 +8,7 @@ from starlette.concurrency import run_in_threadpool
 import importlib.util
 import io
 import os
+import secrets
 import sqlite3
 import threading
 import uuid
@@ -23,13 +24,25 @@ IMAGE_DIR = BASE / "catalog" / "images"
 IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD = 20 * 1024 * 1024
 
-# The model repository is expected beside the saree-mirror folder:
-# E:/fitting 2/saree-mirror and E:/fitting 2/fashn-vton-1.5
-DEFAULT_MODEL_WEIGHTS = BASE.parent.parent / "fashn-vton-1.5" / "weights"
-WEIGHTS_DIR = Path(os.getenv("FASHN_VTON_WEIGHTS_DIR", str(DEFAULT_MODEL_WEIGHTS))).expanduser()
+# The model repository lives either inside this project (Ai/fashn-vton-1.5)
+# or beside it (../fashn-vton-1.5). Use whichever has weights; default to the inside one.
+_WEIGHT_CANDIDATES = [
+    BASE.parent / "fashn-vton-1.5" / "weights",
+    BASE.parent.parent / "fashn-vton-1.5" / "weights",
+]
+DEFAULT_MODEL_WEIGHTS = next(
+    (p for p in _WEIGHT_CANDIDATES if (p / "model.safetensors").is_file()),
+    _WEIGHT_CANDIDATES[0],
+)
+WEIGHTS_DIR = Path(os.getenv("FASHN_VTON_WEIGHTS_DIR") or str(DEFAULT_MODEL_WEIGHTS)).expanduser()
 MODEL_CATEGORY = os.getenv("LOCAL_VTON_CATEGORY", "one-pieces")
 GARMENT_PHOTO_TYPE = os.getenv("LOCAL_VTON_GARMENT_PHOTO_TYPE", "flat-lay")
 NUM_TIMESTEPS = int(os.getenv("LOCAL_VTON_STEPS", "20"))
+# Staff PIN for catalogue changes. Empty = catalogue admin stays open (old behaviour).
+ADMIN_PIN = os.getenv("ADMIN_PIN", "").strip()
+
+BOTTOM_WORDS = ("pant", "trouser", "jean", "bottom", "skirt", "short", "legging", "palazzo", "jogger", "chino", "cargo", "dhoti")
+ONE_PIECE_WORDS = ("dress", "gown", "saree", "lehenga", "kurta", "one-piece", "frock", "jumpsuit", "romper", "anarkali", "dungaree")
 
 app = FastAPI(title="VESTIQ Product & Virtual Try-On API", version="0.5.0")
 app.add_middleware(
@@ -43,7 +56,7 @@ app.add_middleware(
         if x.strip()
     ],
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 app.mount("/media", StaticFiles(directory=str(IMAGE_DIR)), name="media")
@@ -67,6 +80,23 @@ def get_db():
 
 def product_rows_to_dicts(rows):
     return [dict(row) for row in rows]
+
+
+def require_staff(pin: str | None):
+    """Catalogue changes need the staff PIN when ADMIN_PIN is set."""
+    if ADMIN_PIN and not secrets.compare_digest((pin or "").strip(), ADMIN_PIN):
+        raise HTTPException(status_code=401, detail="Staff PIN is incorrect.")
+
+
+def guess_tryon_category(department: str, category: str) -> str | None:
+    if department == "footwear":
+        return None
+    category_lower = category.lower()
+    if any(word in category_lower for word in BOTTOM_WORDS):
+        return "bottoms"
+    if any(word in category_lower for word in ONE_PIECE_WORDS):
+        return "one-pieces"
+    return "tops"
 
 
 def model_status():
@@ -105,6 +135,8 @@ def generate_local_tryon(
     person_bytes: bytes,
     garment_bytes: bytes,
     category: str | None = None,
+    steps: int = NUM_TIMESTEPS,
+    seed: int = 42,
 ) -> bytes:
     # Product records store FASHN's category: tops, bottoms, or one-pieces.
     selected_category = category or MODEL_CATEGORY
@@ -130,9 +162,9 @@ def generate_local_tryon(
             category=selected_category,
             garment_photo_type=GARMENT_PHOTO_TYPE,
             num_samples=1,
-            num_timesteps=NUM_TIMESTEPS,
+            num_timesteps=steps,
             guidance_scale=1.5,
-            seed=42,
+            seed=seed,
             segmentation_free=True,
         )
         if not result.images:
@@ -156,7 +188,15 @@ def health():
         "steps": NUM_TIMESTEPS,
         "catalogue_database": str(DB_PATH),
         "catalogue_database_exists": DB_PATH.is_file(),
+        "admin_locked": bool(ADMIN_PIN),
     }
+
+
+@app.post("/api/admin/check")
+def admin_check(x_admin_pin: str | None = Header(None)):
+    """Lets the staff screen verify a PIN before showing catalogue tools."""
+    require_staff(x_admin_pin)
+    return {"ok": True}
 
 
 @app.get("/api/products")
@@ -244,7 +284,9 @@ async def add_product(
     image: UploadFile = File(...),
     department: str = Form("women"),
     tryon_category: str | None = Form(None),
+    x_admin_pin: str | None = Header(None),
 ):
+    require_staff(x_admin_pin)
     name = name.strip()
     category = category.strip()
     color = color.strip()
@@ -265,15 +307,7 @@ async def add_product(
 
     # Determine FASHN category from the product category when not explicitly supplied.
     if tryon_category is None or not tryon_category.strip():
-        category_lower = category.lower()
-        if department == "footwear":
-            selected_tryon_category = None
-        elif any(word in category_lower for word in ("pant", "trouser", "jean", "bottom", "skirt")):
-            selected_tryon_category = "bottoms"
-        elif any(word in category_lower for word in ("dress", "gown", "saree", "lehenga", "kurta", "one-piece")):
-            selected_tryon_category = "one-pieces"
-        else:
-            selected_tryon_category = "tops"
+        selected_tryon_category = guess_tryon_category(department, category)
     else:
         selected_tryon_category = tryon_category.strip().lower()
         if selected_tryon_category not in {"tops", "bottoms", "one-pieces"}:
@@ -342,14 +376,58 @@ async def add_product(
         connection.close()
 
 
+@app.delete("/api/products/{product_id}")
+def archive_product(product_id: str, x_admin_pin: str | None = Header(None)):
+    """Hide a product from the catalogue. The row and image stay, so it can be restored in SQLite."""
+    require_staff(x_admin_pin)
+    connection = get_db()
+    try:
+        changed = connection.execute(
+            "UPDATE products SET active = 0 WHERE id = ? AND active = 1", (product_id,)
+        ).rowcount
+        connection.commit()
+        if not changed:
+            raise HTTPException(status_code=404, detail="Product not found.")
+        return {"id": product_id, "active": 0}
+    finally:
+        connection.close()
+
+
+def product_image_bytes(product_id: str) -> tuple[bytes, str | None]:
+    """Read a catalogue garment straight from disk, so the browser doesn't download and re-upload it."""
+    connection = get_db()
+    try:
+        row = connection.execute(
+            "SELECT image, tryon_category FROM products WHERE id = ? AND active = 1", (product_id,)
+        ).fetchone()
+    finally:
+        connection.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Product not found.")
+    path = (IMAGE_DIR / Path(row["image"]).name).resolve()
+    if path.parent != IMAGE_DIR.resolve() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Product image is missing on the server.")
+    return path.read_bytes(), row["tryon_category"]
+
+
 @app.post("/api/try-on")
 async def try_on(
     person_image: UploadFile = File(...),
-    garment_image: UploadFile = File(...),
+    garment_image: UploadFile | None = File(None),
     category: str | None = Form(None),
+    product_id: str | None = Form(None),
+    steps: int | None = Form(None),
+    seed: int | None = Form(None),
 ):
     person = await person_image.read()
-    garment = await garment_image.read()
+    if product_id:
+        garment, product_category = product_image_bytes(product_id.strip())
+        category = category or product_category
+    else:
+        garment = await garment_image.read() if garment_image else b""
+    # ponytail: 8-40 covers "quick" to "detailed"; outside that the model is either mush or too slow on a laptop GPU.
+    steps = min(40, max(8, steps or NUM_TIMESTEPS))
+    seed = 42 if seed is None else seed % 2**31
 
     if not person or not garment:
         raise HTTPException(
@@ -372,6 +450,8 @@ async def try_on(
             person,
             garment,
             category,
+            steps,
+            seed,
         )
         return Response(
             output,

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.venv/
+backend/.env
+fashn-vton-1.5/weights/
+.impeccable/review/
+.impeccable/questions/
+backend/try_local_result.png

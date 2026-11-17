@@ -1,4 +1,4 @@
-# Saree Mirror — Local AI Virtual Try-On Kiosk
+# VESTIQ: local AI virtual fitting room
 
 Touch-first retail kiosk prototype: React + Vite frontend, FastAPI backend, and local FASHN VTON v1.5 inference. The backend no longer calls the paid FASHN API and does not require an API key or API credits.
 
@@ -8,7 +8,14 @@ FASHN VTON v1.5 currently accepts only `tops`, `bottoms`, and `one-pieces`; it h
 
 ## Folder layout
 
-Keep the model repository beside this project: `E:/fitting 2/saree-mirror` and `E:/fitting 2/fashn-vton-1.5`.
+```
+Ai/
+  src/              React + Vite app (run npm commands here)
+  backend/          FastAPI server, catalogue.db, catalog/images
+  fashn-vton-1.5/   local model; weights go in fashn-vton-1.5/weights
+```
+
+The backend finds `fashn-vton-1.5/weights` inside this folder or one level up; set `FASHN_VTON_WEIGHTS_DIR` to override.
 
 ## Install local AI on Windows
 
@@ -55,7 +62,10 @@ LOCAL_VTON_CATEGORY=one-pieces
 LOCAL_VTON_GARMENT_PHOTO_TYPE=flat-lay
 LOCAL_VTON_STEPS=20
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+ADMIN_PIN=
 ```
+
+Set `ADMIN_PIN` (for example `ADMIN_PIN=2468`) to lock the Staff screen. Adding and removing products then needs that PIN. Left blank, the Staff screen stays open.
 
 No `FASHN_API_KEY` is used. The backend loads the model only on the first try-on request and reuses it for later requests. Requests are serialised to avoid multiple simultaneous generations competing for the laptop GPU.
 
@@ -75,10 +85,12 @@ Check `http://127.0.0.1:8000/api/health`. It should report `local-ai-ready` afte
 Open a second terminal:
 
 ```powershell
-cd "E:\fitting 2\saree-mirror\frontend"
+cd "<project folder>\Ai"
 npm install
 npm run dev
 ```
+
+The project's `.npmrc` points npm at the public registry, so a private registry set in your user `.npmrc` doesn't block installs.
 
 Open `http://localhost:5173`. Existing camera capture, catalogue selection and admin uploads are retained. The frontend receives the generated PNG from the local backend.
 
@@ -92,7 +104,11 @@ The model repository recommends a dedicated GPU and automatically selects CUDA w
 
 ## Admin security
 
-The catalogue admin screen is not password-protected. Keep the prototype on a trusted network. Add staff authentication, HTTPS, retention controls and audit logging before production.
+The Staff screen is protected only by `ADMIN_PIN` (sent as a header over plain HTTP). Keep the app on a trusted network, and add HTTPS and proper staff accounts before wider use.
+
+## Checks
+
+`cd backend && python test_main.py` checks the category guesser and the staff PIN guard.
 
 ## Licensing
 

@@ -1,894 +1,975 @@
-
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  Camera, Check, ChevronLeft, ChevronRight, CircleHelp,
-  Heart, Image as ImageIcon, RefreshCw, ScanFace,
-  ShieldCheck, Sparkles, X
+  Camera, Check, ChevronLeft, ChevronRight, CircleHelp, Columns2, Heart,
+  ImageUp, RefreshCw, Shuffle, Sun, Timer, X
 } from 'lucide-react';
+import '@fontsource-variable/bricolage-grotesque/standard.css';
+import '@fontsource/libre-barcode-39-text/400.css';
 import './styles.css';
+import { gsap, ScrollTrigger, SplitText, getLenis, magnetic, reduced, scrollTop } from './motion';
+import Admin from './Admin';
+import { API, Barcode, Hanger, TYPE_LABEL, TagButton, imageUrl, priceLabel, tone, useObjectUrl } from './ui';
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const IDLE_MS = 90_000; // quiet time before the "still there?" tag drops
+const IDLE_GRACE = 15; // seconds of warning before the session erases itself
+const FLOW = { consent: 0, camera: 0, catalog: 1, processing: 2, result: 2 };
+const TABS = ['Photo', 'Choose', 'See'];
+const DEPARTMENTS = [['all', 'Everything'], ['men', 'Men'], ['women', 'Women'], ['kids', 'Kids'], ['footwear', 'Footwear']];
+const HERO = [['Try', 'women', 'one photo'], ['it', 'kids', 'any piece on our rail'], ['on.', 'men', 'no trial room queue']];
+const HOW = [
+  ['Take one photo', 'Stand back so your whole body fits, or upload a full-length photo.'],
+  ['Choose from the rail', 'Try a single piece, or put a top and bottoms together as an outfit.'],
+  ['See it on you', 'Your look appears after a short wait. Keep the ones you like and show the tag to our staff.']
+];
 
-const imageUrl = value =>
-  value?.startsWith('/') ? `${API}${value}` : value;
-
-const money = n =>
-  new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0
-  }).format(n || 0);
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+const lookName = look => look.items.map(i => i.name).join(' + ');
+let lookSeq = 0;
 
 function App() {
   const [step, setStep] = useState('welcome');
   const [catalog, setCatalog] = useState([]);
-  const [departmentFilter, setDepartmentFilter] = useState('all');
-  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [loaded, setLoaded] = useState(false);
+  const [health, setHealth] = useState({ mode: 'checking', admin_locked: false });
+  const [department, setDepartment] = useState('all');
+  const [category, setCategory] = useState('all');
+  const [mode, setMode] = useState('single');
   const [selected, setSelected] = useState(null);
-  const [selectionMode, setSelectionMode] = useState('individual');
-  const [selectedTop, setSelectedTop] = useState(null);
-  const [selectedBottom, setSelectedBottom] = useState(null);
-  const [resultLabel, setResultLabel] = useState('');
-  const [resultPrice, setResultPrice] = useState(0);
+  const [top, setTop] = useState(null);
+  const [bottom, setBottom] = useState(null);
   const [photo, setPhoto] = useState(null);
-  const [result, setResult] = useState(null);
-  const [mode, setMode] = useState('checking');
-  const [error, setError] = useState('');
-  const [cameraReady, setCameraReady] = useState(false);
   const [consent, setConsent] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
+  const [countdown, setCountdown] = useState(null);
+  const [light, setLight] = useState(null);
+  const [sharper, setSharper] = useState(false);
+  const [busy, setBusy] = useState(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [looks, setLooks] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const [compareId, setCompareId] = useState(null);
+  const [comparing, setComparing] = useState(false);
+  const [error, setError] = useState('');
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [idleLeft, setIdleLeft] = useState(null);
+  const [pin, setPin] = useState('');
 
-  const [adminName, setAdminName] = useState('');
-  const [adminCategory, setAdminCategory] = useState('Shirts');
-  const [adminDepartment, setAdminDepartment] = useState('women');
-  const [adminColor, setAdminColor] = useState('');
-  const [adminPrice, setAdminPrice] = useState('');
-  const [adminDescription, setAdminDescription] = useState('');
-  const [adminImage, setAdminImage] = useState(null);
-  const [adminSaving, setAdminSaving] = useState(false);
-  const [adminMessage, setAdminMessage] = useState('');
-
+  const rootRef = useRef(null);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const fileRef = useRef(null);
+  const abortRef = useRef(null);
+  const lastActive = useRef(Date.now());
+  const stepRef = useRef(step);
+  const looksRef = useRef(looks);
+  stepRef.current = step;
+  looksRef.current = looks;
 
-  const visibleCatalog = catalog.filter(item =>
-    (departmentFilter === 'all' || item.department === departmentFilter) &&
-    (categoryFilter === 'all' || item.category === categoryFilter)
-  );
-  const availableCategories = [...new Set(
+  const photoUrl = useObjectUrl(photo);
+  const active = looks.find(l => l.id === activeId) || null;
+  const compare = looks.find(l => l.id === compareId) || null;
+  const tryable = catalog.filter(i => i.tryon_category);
+
+  const categories = useMemo(() => {
+    const seen = new Map();
     catalog
-      .filter(item => departmentFilter === 'all' || item.department === departmentFilter)
-      .map(item => item.category)
-  )].sort();
-
-  useEffect(() => {
-    fetch(`${API}/api/products`)
-      .then(r => {
-        if (!r.ok) throw new Error('Catalogue unavailable');
-        return r.json();
-      })
-      .then(items => {
-        setCatalog(items);
-        setSelected(items[0] || null);
-        setSelectedTop(items.find(item => item.tryon_category === 'tops') || null);
-        setSelectedBottom(items.find(item => item.tryon_category === 'bottoms') || null);
-      })
-      .catch(() => {
-        setError('Could not connect to the catalogue. Please start the backend.');
+      .filter(i => department === 'all' || i.department === department)
+      .forEach(i => {
+        const key = i.category.trim().toLowerCase();
+        if (!seen.has(key)) seen.set(key, cap(i.category.trim()));
       });
+    return [...seen].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [catalog, department]);
 
-    fetch(`${API}/api/health`)
-      .then(r => r.json())
-      .then(d => setMode(d.mode))
-      .catch(() => setMode('offline'));
+  const visible = catalog.filter(i =>
+    (department === 'all' || i.department === department) &&
+    (category === 'all' || i.category.trim().toLowerCase() === category)
+  );
+
+  /* ---------- data ---------- */
+
+  const loadCatalog = useCallback(async () => {
+    try {
+      const response = await fetch(`${API}/api/products`);
+      if (!response.ok) throw new Error();
+      const items = await response.json();
+      setCatalog(items);
+      const keep = (cur, ok) => items.find(i => i.id === cur?.id && ok(i)) || items.find(ok) || null;
+      setSelected(cur => keep(cur, i => i.tryon_category));
+      setTop(cur => keep(cur, i => i.tryon_category === 'tops'));
+      setBottom(cur => keep(cur, i => i.tryon_category === 'bottoms'));
+    } catch {
+      setError('The catalogue did not load. Check that the fitting computer (backend) is running.');
+    } finally {
+      setLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => { loadCatalog(); }, [loadCatalog]);
+
+  // Health is polled so a backend started after the app still turns the status live.
+  useEffect(() => {
+    const check = () => fetch(`${API}/api/health`).then(r => r.json()).then(setHealth)
+      .catch(() => setHealth(h => ({ ...h, mode: 'offline' })));
+    check();
+    const id = setInterval(check, 20000);
+    return () => clearInterval(id);
   }, []);
 
   useEffect(() => {
-    if (step === 'camera') {
-      startCamera();
-    } else {
-      stopCamera();
-    }
+    if (!catalog.length && loaded && !['offline', 'checking'].includes(health.mode)) loadCatalog();
+  }, [health.mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    return () => stopCamera();
+  /* ---------- session ---------- */
+
+  const reset = useCallback(() => {
+    abortRef.current?.abort();
+    looksRef.current.forEach(l => URL.revokeObjectURL(l.url));
+    setLooks([]);
+    setActiveId(null);
+    setCompareId(null);
+    setComparing(false);
+    setPhoto(null);
+    setConsent(false);
+    setIdleLeft(null);
+    setPin('');
+    setHelpOpen(false);
+    setError('');
+    setStep('welcome');
+  }, []);
+
+  // A device passed between strangers: after a quiet spell, warn, then erase the session.
+  useEffect(() => {
+    const poke = () => { lastActive.current = Date.now(); setIdleLeft(null); };
+    const events = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart'];
+    events.forEach(e => window.addEventListener(e, poke, { passive: true }));
+    const id = setInterval(() => {
+      if (stepRef.current === 'welcome' || stepRef.current === 'processing') return;
+      const left = IDLE_GRACE - Math.floor((Date.now() - lastActive.current - IDLE_MS) / 1000);
+      if (left <= 0) reset();
+      else if (left <= IDLE_GRACE) setIdleLeft(left);
+    }, 1000);
+    return () => {
+      events.forEach(e => window.removeEventListener(e, poke));
+      clearInterval(id);
+    };
+  }, [reset]);
+
+  useEffect(() => { lastActive.current = Date.now(); }, [step]);
+
+  useEffect(() => {
+    if (!error) return;
+    const id = setTimeout(() => setError(''), 12000);
+    return () => clearTimeout(id);
+  }, [error]);
+
+  /* ---------- camera ---------- */
+
+  useEffect(() => {
+    if (step !== 'camera') return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError('This browser cannot open the camera here. Upload a full-length photo instead.');
+      return;
+    }
+    let cancelled = false;
+    navigator.mediaDevices
+      .getUserMedia({ video: { facingMode: 'user', width: { ideal: 1080 }, height: { ideal: 1920 } }, audio: false })
+      .then(async stream => {
+        if (cancelled) return stream.getTracks().forEach(t => t.stop());
+        streamRef.current = stream;
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => {});
+        setCameraReady(true);
+        setError('');
+      })
+      .catch(() => setError('The camera is not available. Allow camera access in the browser, or upload a full-length photo instead.'));
+    return () => {
+      cancelled = true;
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+      setCameraReady(false);
+      setCountdown(null);
+      setLight(null);
+    };
   }, [step]);
 
-  async function startCamera() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: 'user',
-          width: { ideal: 1080 },
-          height: { ideal: 1920 }
-        },
-        audio: false
-      });
+  // Light check: average brightness of a tiny copy of the frame.
+  useEffect(() => {
+    if (!cameraReady) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 32;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const id = setInterval(() => {
+      const video = videoRef.current;
+      if (!video?.videoWidth) return;
+      ctx.drawImage(video, 0, 0, 32, 32);
+      const d = ctx.getImageData(0, 0, 32, 32).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) sum += d[i] * 0.2126 + d[i + 1] * 0.7152 + d[i + 2] * 0.0722;
+      const mean = sum / (d.length / 4);
+      // ponytail: fixed thresholds on mean luma; a histogram check would catch backlighting better.
+      setLight(mean < 60 ? 'dark' : mean > 210 ? 'bright' : 'good');
+    }, 700);
+    return () => clearInterval(id);
+  }, [cameraReady]);
 
-      streamRef.current = stream;
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-      }
-
-      setCameraReady(true);
-      setError('');
-    } catch (err) {
-      setCameraReady(false);
-      setError(
-        'Camera access is unavailable. Allow camera permission or upload a full-length photo.'
-      );
-    }
-  }
-
-  function stopCamera() {
-    streamRef.current?.getTracks().forEach(track => track.stop());
-    streamRef.current = null;
-    setCameraReady(false);
-  }
-
-  function capture() {
+  function snap() {
     const video = videoRef.current;
-    if (!video || !video.videoWidth) return;
-
+    if (!video?.videoWidth) return;
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    canvas.toBlob(blob => blob && acceptPhoto(new File([blob], 'customer-photo.jpg', { type: 'image/jpeg' })), 'image/jpeg', 0.92);
+  }
 
-    canvas.getContext('2d').drawImage(
-      video, 0, 0, canvas.width, canvas.height
-    );
+  useEffect(() => {
+    if (countdown === null) return;
+    if (countdown === 0) {
+      setCountdown(null);
+      snap();
+      return;
+    }
+    const id = setTimeout(() => setCountdown(n => (n === null ? null : n - 1)), 1000);
+    return () => clearTimeout(id);
+  }, [countdown]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    canvas.toBlob(blob => {
-      if (!blob) return;
-
-      setPhoto(new File([blob], 'customer-photo.jpg', {
-        type: 'image/jpeg'
-      }));
-
-      setSelected(catalog[0] || null);
-      setStep('catalog');
-    }, 'image/jpeg', 0.92);
+  function acceptPhoto(file) {
+    setPhoto(file);
+    setStep('catalog');
   }
 
   function uploadPhoto(event) {
     const file = event.target.files?.[0];
-
-    if (file) {
-      setPhoto(file);
-      setSelected(catalog[0] || null);
-      setStep('catalog');
-    }
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return setError('That file is not a photo. Choose a JPG, PNG or WEBP image.');
+    acceptPhoto(file);
   }
 
-  function nextDress() {
-    if (!catalog.length) return;
+  /* ---------- try-on ---------- */
 
-    const currentIndex = catalog.findIndex(
-      item => item.id === selected?.id
-    );
-
-    const nextIndex = (currentIndex + 1) % catalog.length;
-    setSelected(catalog[nextIndex]);
-  }
-
-  function previousDress() {
-    if (!catalog.length) return;
-
-    const currentIndex = catalog.findIndex(
-      item => item.id === selected?.id
-    );
-
-    const previousIndex =
-      (currentIndex - 1 + catalog.length) % catalog.length;
-
-    setSelected(catalog[previousIndex]);
-  }
-
-  async function requestTryOn(personFile, item) {
-    const garmentResponse = await fetch(imageUrl(item.image));
-    if (!garmentResponse.ok) throw new Error(`Could not load ${item.name}.`);
-    const garment = await garmentResponse.blob();
-    const formData = new FormData();
-    formData.append('person_image', personFile);
-    formData.append('garment_image', new File([garment], `${item.id}.jpg`, { type: garment.type || 'image/jpeg' }));
-    formData.append('category', item.tryon_category);
-    const response = await fetch(`${API}/api/try-on`, { method: 'POST', body: formData });
+  async function requestTryOn(person, item, seed, signal) {
+    const body = new FormData();
+    body.append('person_image', person);
+    body.append('product_id', item.id); // the backend reads the garment from its own disk
+    body.append('category', item.tryon_category);
+    body.append('seed', String(seed));
+    if (sharper) body.append('steps', '30');
+    const response = await fetch(`${API}/api/try-on`, { method: 'POST', body, signal });
     if (!response.ok) {
       const problem = await response.json().catch(() => ({}));
-      throw new Error(problem.detail || `Try-on failed for ${item.name}.`);
+      throw new Error(problem.detail || `The preview of ${item.name} did not finish. Try again.`);
     }
-    return await response.blob();
+    return response.blob();
   }
 
-  async function generate(item = selected) {
-    if (!photo || !item) return;
+  async function fit(items, seed = 42) {
+    if (!photo || !items.length) return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setError('');
+    setElapsed(0);
+    setStep('processing');
+    try {
+      // One garment per pass: an outfit applies the top, then the bottoms over that result.
+      let person = photo;
+      let blob;
+      for (const [i, item] of items.entries()) {
+        setBusy({ item, pass: i + 1, total: items.length });
+        blob = await requestTryOn(person, item, seed, controller.signal);
+        person = new File([blob], `vestiq-pass-${i + 1}.png`, { type: 'image/png' });
+      }
+      const look = { id: `look-${++lookSeq}`, url: URL.createObjectURL(blob), items, kept: false };
+      setLooks(ls => [...ls, look]);
+      setActiveId(look.id);
+      setCompareId(null);
+      setComparing(false);
+      setStep('result');
+    } catch (err) {
+      if (err.name !== 'AbortError') setError(err.message || 'Something went wrong. Try again.');
+      if (stepRef.current === 'processing') setStep('catalog');
+    } finally {
+      setBusy(null);
+      abortRef.current = null;
+    }
+  }
 
+  useEffect(() => {
+    if (step !== 'processing') return;
+    const id = setInterval(() => setElapsed(s => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [step]);
+
+  function choose(item) {
+    if (mode === 'single') return setSelected(item);
+    if (item.tryon_category === 'tops') setTop(item);
+    else if (item.tryon_category === 'bottoms') setBottom(item);
+    else setError(item.tryon_category ? 'Full-length pieces are tried on alone. Switch to “One piece” to try this.' : 'Footwear can’t be tried on yet.');
+  }
+
+  function cycle(dir) {
+    const list = visible.filter(i => i.tryon_category);
+    if (!list.length) return;
+    const index = list.findIndex(i => i.id === selected?.id);
+    const next = list[(index + dir + list.length) % list.length];
+    setSelected(next);
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`p-${next.id}`);
+      if (!el) return;
+      const lenis = getLenis();
+      if (lenis) lenis.scrollTo(el, { offset: -160 });
+      else el.scrollIntoView({ block: 'center' });
+    });
+  }
+
+  function startWith(item) {
+    setMode('single');
     setSelected(item);
-    setStep('processing');
-    setError('');
-
-    try {
-      const blob = await requestTryOn(photo, item);
-      if (result) URL.revokeObjectURL(result);
-      setResult(URL.createObjectURL(blob));
-      setResultLabel(item.name);
-      setResultPrice(Number(item.price || 0));
-      setStep('result');
-    } catch (err) {
-      setError(err.message || 'Something went wrong. Please try again.');
-      setStep('catalog');
-    }
+    setStep('consent');
   }
 
-  async function generateOutfit() {
-    if (!photo || !selectedTop || !selectedBottom) {
-      setError('Please select one shirt and one pair of pants.');
-      return;
-    }
-    setStep('processing');
-    setError('');
-    try {
-      // FASHN accepts one garment per inference. Apply the top, then the bottom.
-      const topResult = await requestTryOn(photo, selectedTop);
-      const intermediatePerson = new File([topResult], 'vestiq-top-result.png', { type: 'image/png' });
-      const finalResult = await requestTryOn(intermediatePerson, selectedBottom);
-      if (result) URL.revokeObjectURL(result);
-      setResult(URL.createObjectURL(finalResult));
-      setResultLabel(`${selectedTop.name} + ${selectedBottom.name}`);
-      setResultPrice(Number(selectedTop.price || 0) + Number(selectedBottom.price || 0));
-      setStep('result');
-    } catch (err) {
-      setError(err.message || 'Complete outfit generation failed.');
-      setStep('catalog');
-    }
+  function toggleKeep(id) {
+    setLooks(ls => ls.map(l => (l.id === id ? { ...l, kept: !l.kept } : l)));
   }
 
-  async function saveSaree(event) {
-    event.preventDefault();
-    setAdminMessage('');
+  function pickLook(id) {
+    if (comparing && id !== activeId) setCompareId(id);
+    else setActiveId(id);
+  }
 
-    if (!adminImage) {
-      setAdminMessage('Please choose a product photograph.');
-      return;
-    }
+  function toggleCompare() {
+    if (comparing) return setComparing(false);
+    setComparing(true);
+    setCompareId(looks.filter(l => l.id !== activeId).at(-1)?.id || null);
+  }
 
-    setAdminSaving(true);
+  /* ---------- motion ---------- */
 
-    try {
-      const formData = new FormData();
+  useEffect(() => {
+    document.documentElement.classList.toggle('motion', !reduced());
+    getLenis();
+    return magnetic();
+  }, []);
 
-      formData.append('name', adminName);
-      formData.append('category', adminCategory);
-      formData.append('color', adminColor);
-      formData.append('price', adminPrice);
-      formData.append('description', adminDescription);
-      formData.append('department', adminDepartment);
-      formData.append('image', adminImage);
+  // Tags sway with scroll speed and swing when touched. One quickTo per tag, shared by both.
+  useEffect(() => {
+    if (reduced()) return;
+    const swings = new WeakMap();
+    const swing = (el, r) => {
+      if (!swings.has(el)) swings.set(el, gsap.quickTo(el, 'rotation', { duration: 1.4, ease: 'elastic.out(1, 0.3)' }));
+      swings.get(el)(r);
+    };
+    let settle;
+    const trigger = ScrollTrigger.create({
+      start: 0,
+      end: 'max',
+      onUpdate: s => {
+        const r = gsap.utils.clamp(-6, 6, -s.getVelocity() / 350);
+        const els = document.querySelectorAll('.swing');
+        els.forEach((el, i) => swing(el, r * (0.75 + (i % 3) * 0.12)));
+        clearTimeout(settle);
+        settle = setTimeout(() => els.forEach(el => swing(el, 0)), 140);
+      }
+    });
+    let last = null;
+    const over = e => {
+      const el = e.target.closest?.('.swing') ?? null;
+      if (el === last) return;
+      last = el;
+      if (!el) return;
+      swing(el, e.movementX < 0 ? -5 : 5);
+      setTimeout(() => swing(el, 0), 120);
+    };
+    document.addEventListener('pointerover', over);
+    return () => {
+      trigger.kill();
+      clearTimeout(settle);
+      document.removeEventListener('pointerover', over);
+    };
+  }, []);
 
-      const response = await fetch(`${API}/api/products`, {
-        method: 'POST',
-        body: formData
+  // Every step: headings set letter by letter; tags on threads drop and settle.
+  useLayoutEffect(() => {
+    scrollTop();
+    if (reduced()) return;
+    const ctx = gsap.context(() => {
+      gsap.utils.toArray('[data-split]').forEach(el => {
+        const split = SplitText.create(el, { type: 'words,chars', mask: 'chars' });
+        gsap.from(split.chars, { yPercent: 115, duration: 0.9, ease: 'expo.out', stagger: 0.016, delay: 0.08 });
+      });
+      gsap.utils.toArray('.solo').forEach(el =>
+        gsap.from(el, { yPercent: -14, rotation: 6, transformOrigin: '50% 0', duration: 1.5, ease: 'elastic.out(1, 0.42)' })
+      );
+      if (step === 'result') {
+        gsap.fromTo('.ba, .compare', { clipPath: 'inset(0% 0% 100% 0%)' }, { clipPath: 'inset(0% 0% 0% 0%)', duration: 1.3, ease: 'expo.inOut' });
+        // the original photo peeks once, so the slider announces itself
+        gsap.timeline({ delay: 1.2 })
+          .to('.ba', { '--pos': '34%', duration: 0.9, ease: 'power3.inOut' })
+          .to('.ba', { '--pos': '0%', duration: 0.9, ease: 'power3.inOut' }, '+=0.35');
+      }
+    }, rootRef);
+    return () => ctx.revert();
+  }, [step]);
+
+  // Welcome: one orchestrated entrance, then scroll scenes.
+  useLayoutEffect(() => {
+    if (step !== 'welcome' || !loaded || reduced()) return;
+    const root = rootRef.current;
+    const ctx = gsap.context(() => {
+      gsap.timeline({ defaults: { ease: 'expo.out' } })
+        .from('.shopfront > .rail', { scaleX: 0, transformOrigin: '0 50%', duration: 0.9 })
+        .from('.hero-hang', { yPercent: -125, rotation: i => [-16, 12, -9][i], transformOrigin: '50% 0', duration: 1.7, ease: 'elastic.out(1, 0.38)', stagger: 0.14 }, 0.25)
+        .from('.window-rail .hanger', { x: 140, opacity: 0, duration: 1.2, stagger: 0.1 }, 0.5)
+        .from('.hero-copy > *', { y: 26, opacity: 0, duration: 0.9, stagger: 0.08 }, 0.85);
+
+      gsap.utils.toArray('[data-reveal]').forEach(el => {
+        const split = SplitText.create(el, { type: 'words,chars', mask: 'chars' });
+        gsap.from(split.chars, { yPercent: 115, stagger: 0.014, duration: 0.8, ease: 'expo.out', scrollTrigger: { trigger: el, start: 'top 85%', once: true } });
       });
 
-      const data = await response.json();
+      gsap.timeline({ scrollTrigger: { trigger: '.how-line', start: 'top 80%', end: 'center 50%', scrub: 0.6 } })
+        .from('.how .rail', { scaleX: 0, transformOrigin: '0 50%', ease: 'none' })
+        .from('.step-hang', { yPercent: -50, opacity: 0, rotation: -14, transformOrigin: '50% 0', stagger: 0.25, ease: 'power2.out' }, 0.1);
 
-      if (!response.ok) {
-        throw new Error(data.detail || 'Could not save this product.');
+      const band = SplitText.create('.band-big', { type: 'words' });
+      gsap.fromTo(band.words, { opacity: 0.16 }, { opacity: 1, stagger: 0.12, ease: 'none', scrollTrigger: { trigger: '.woven-band', start: 'top 70%', end: 'center 45%', scrub: true } });
+
+      const track = root.querySelector('.rail-track');
+      const viewport = root.querySelector('.rail-viewport');
+      const distance = () => track.scrollWidth - viewport.clientWidth;
+      if (track && distance() > 40) {
+        gsap.to(track, {
+          x: () => -distance(),
+          ease: 'none',
+          scrollTrigger: { trigger: '.rail-section', start: 'top top', end: () => `+=${distance()}`, pin: true, scrub: 0.6, invalidateOnRefresh: true }
+        });
       }
+    }, rootRef);
+    requestAnimationFrame(() => ScrollTrigger.refresh());
+    return () => ctx.revert();
+  }, [step, loaded, catalog.length]);
 
-      const items = await fetch(`${API}/api/products`).then(r => r.json());
+  /* ---------- view ---------- */
 
-      setCatalog(items);
-      setAdminMessage(`${data.name} was added to the catalogue.`);
-
-      setAdminName('');
-      setAdminColor('');
-      setAdminPrice('');
-      setAdminDescription('');
-      setAdminImage(null);
-
-      const fileInput = document.getElementById('admin-saree-image');
-      if (fileInput) fileInput.value = '';
-    } catch (err) {
-      setAdminMessage(err.message || 'Upload failed.');
-    } finally {
-      setAdminSaving(false);
-    }
-  }
-
-  function reset() {
-    if (result) URL.revokeObjectURL(result);
-
-    setPhoto(null);
-    setResult(null);
-    setConsent(false);
-    setSelected(catalog[0] || null);
-    setStep('welcome');
-    setError('');
-  }
+  const inFlow = step in FLOW;
+  const outfitPrice = (top ? Number(top.price) || 0 : 0) + (bottom ? Number(bottom.price) || 0 : 0);
+  const isOn = item => (mode === 'single' ? selected?.id === item.id : top?.id === item.id || bottom?.id === item.id);
+  const canTry = mode === 'single' ? !!selected?.tryon_category : !!(top && bottom);
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark">S</span>
-          <div>
-            <b>VESTIQ</b>
-            <small>YOUR STYLE. YOUR FIT. YOUR MIRROR.</small>
-          </div>
-        </div>
-
-        <div className="top-center">
-          THE VIRTUAL FITTING EXPERIENCE
-        </div>
-
-        <div className="top-actions">
-          <span className={`mode-pill ${mode === 'local-ai-ready' ? 'live' : ''}`}>
-            <i />
-            {mode === 'local-ai-ready'
-              ? 'LOCAL AI READY'
-              : mode === 'local-ai-setup-required'
-                ? 'LOCAL AI SETUP REQUIRED'
-                : mode === 'offline'
-                  ? 'BACKEND OFFLINE'
-                  : 'CONNECTING'}
-          </span>
-
-          <button
-            className="admin-link"
-            onClick={() => {
-              setAdminMessage('');
-              setStep('admin');
-            }}
-          >
-            CATALOGUE ADMIN
+    <div className="app" ref={rootRef}>
+      <header className="fascia">
+        <span className="wordmark">Vestiq</span>
+        {inFlow && (
+          <ol className="size-tabs" style={{ '--i': FLOW[step] }} aria-label="Progress">
+            {TABS.map((label, i) => (
+              <li key={label} aria-current={FLOW[step] === i ? 'step' : undefined}>
+                <b>{i + 1}</b>{label}
+              </li>
+            ))}
+          </ol>
+        )}
+        <div className="fascia-right">
+          {health.mode === 'local-ai-ready' && (
+            <span className="status live" role="status"><i aria-hidden="true" /><span>Fitting ready</span></span>
+          )}
+          <button className="fascia-btn" onClick={() => setHelpOpen(true)}>
+            <CircleHelp size={18} aria-hidden="true" /><span>Help</span>
           </button>
-
-          <button className="icon-btn" aria-label="Help">
-            <CircleHelp size={19} />
-          </button>
+          <button className="fascia-btn" onClick={() => setStep('admin')}>Staff</button>
         </div>
       </header>
 
       <main>
-        {step === 'admin' && (
-          <section className="admin-layout">
-            <div className="admin-heading">
-              <div>
-                <div className="eyebrow">SHOWROOM MANAGEMENT</div>
-                <h2>Add a product to your collection</h2>
-                <p className="muted">
-                  Upload a clear product photograph to add it to the catalogue.
+        {step === 'welcome' && (
+          <div className="welcome">
+            <section className="shopfront">
+              <div className="rail" aria-hidden="true" />
+              <h1 className="hero-tags" aria-label="Try it on.">
+                {HERO.map(([word, stock, note], i) => (
+                  <span key={word} className={`hang hero-hang h${i}`} aria-hidden="true">
+                    <span className="swing">
+                      <span className="string" />
+                      <span className={`tag tone-${stock}`}>
+                        <span className="eyelet" />
+                        <span className="tag-word">{word}</span>
+                        <span className="tag-note">{note}</span>
+                      </span>
+                    </span>
+                  </span>
+                ))}
+              </h1>
+              {/* a two-tier rack: the top tier hangs off the shop rail, the lower tier has its own */}
+              <div className="window-rail" aria-hidden="true">
+                <div className="tier">
+                  {tryable.slice(0, 2).map(item => <Hanger key={item.id} src={imageUrl(item.image)} alt="" />)}
+                </div>
+                {tryable.length > 2 && (
+                  <div className="tier lower">
+                    <div className="rail" />
+                    {tryable.slice(2, 4).map(item => <Hanger key={item.id} src={imageUrl(item.image)} alt="" />)}
+                  </div>
+                )}
+              </div>
+              <div className="hero-copy">
+                <p className="lead">See our clothes on you before you queue for a trial room. Take one photo, then try anything on the rail.</p>
+                <TagButton label="Start fitting" icon={<ChevronRight size={20} aria-hidden="true" />} onClick={() => setStep('consent')} />
+                {['local-ai-ready', 'checking'].includes(health.mode) ? (
+                  <p className="fine">Takes a few minutes. Your photo is erased when you finish.</p>
+                ) : (
+                  <p className="notice" role="status">Try-on isn’t switched on right now. Please ask our staff before you start.</p>
+                )}
+              </div>
+            </section>
+
+            <section className="how" aria-labelledby="how-title">
+              <h2 id="how-title" className="display" data-reveal>One photo, then the whole rail</h2>
+              <div className="how-line">
+                <div className="rail" aria-hidden="true" />
+                <ol className="how-tags">
+                  {HOW.map(([title, text], i) => (
+                    <li key={title} className="step-hang">
+                      <div className="swing">
+                        <span className="string" />
+                        <div className={`tag tone-${HERO[i][1]}`}>
+                          <span className="eyelet" />
+                          <span className="step-no" aria-hidden="true">{i + 1}</span>
+                          <h3>{title}</h3>
+                          <p>{text}</p>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </section>
+
+            <section className="rail-section" aria-labelledby="rail-title">
+              <div className="rail-head">
+                <h2 id="rail-title" className="display" data-reveal>On the rail today</h2>
+                <p className="lead">
+                  {tryable.length
+                    ? `${tryable.length} pieces you can try on now. Tap one to start with it.`
+                    : 'The rail is empty right now. Ask our staff to add today’s stock.'}
                 </p>
               </div>
-
-              <button className="secondary" onClick={() => setStep('welcome')}>
-                BACK TO MIRROR
-              </button>
-            </div>
-
-            <div className="admin-grid">
-              <form className="admin-form" onSubmit={saveSaree}>
-                <label>
-                  Product name
-                  <input
-                    required
-                    value={adminName}
-                    onChange={e => setAdminName(e.target.value)}
-                    placeholder="e.g. Ruby Red Kanjivaram"
-                  />
-                </label>
-
-                <label>
-                  Department
-                  <select
-                    value={adminDepartment}
-                    onChange={e => setAdminDepartment(e.target.value)}
-                  >
-                    <option value="men">Men</option>
-                    <option value="women">Women</option>
-                    <option value="kids">Kids</option>
-                    <option value="footwear">Footwear</option>
-                  </select>
-                </label>
-
-                <div className="admin-fields">
-                  <label>
-                    Category
-                    <input
-                      required
-                      value={adminCategory}
-                      onChange={e => setAdminCategory(e.target.value)}
-                      placeholder="Kanjivaram"
-                    />
-                  </label>
-
-                  <label>
-                    Colour
-                    <input
-                      required
-                      value={adminColor}
-                      onChange={e => setAdminColor(e.target.value)}
-                      placeholder="Ruby red"
-                    />
-                  </label>
+              {tryable.length > 0 && (
+                <div className="rail-viewport">
+                  <ul className="rail-track">
+                    {tryable.map(item => (
+                      <li key={item.id}>
+                        <button className="rail-item" onClick={() => startWith(item)}>
+                          <Hanger src={imageUrl(item.image)} alt="" />
+                          <span className="swing">
+                            <span className="string" />
+                            <span className={`tag mini-tag tone-${tone(item.department)}`}>
+                              <span className="eyelet" />
+                              <b>{item.name}</b>
+                              <small>{priceLabel(item.price)}</small>
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
+              )}
+            </section>
 
-                <label>
-                  Price (₹)
-                  <input
-                    required
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={adminPrice}
-                    onChange={e => setAdminPrice(e.target.value)}
-                    placeholder="5990"
-                  />
-                </label>
-
-                <label>
-                  Description
-                  <textarea
-                    value={adminDescription}
-                    onChange={e => setAdminDescription(e.target.value)}
-                    placeholder="Fabric, colour and design details..."
-                    rows="3"
-                  />
-                </label>
-
-                <label className="upload-drop" htmlFor="admin-saree-image">
-                  <ImageIcon size={25} />
-                  <b>
-                    {adminImage ? adminImage.name : 'Choose product photograph'}
-                  </b>
-                  <small>JPG, PNG or WEBP · Maximum 20 MB</small>
-                  <input
-                    id="admin-saree-image"
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={e => setAdminImage(e.target.files?.[0] || null)}
-                    required={!adminImage}
-                  />
-                </label>
-
-                <button className="primary" disabled={adminSaving}>
-                  {adminSaving ? 'UPLOADING...' : 'UPLOAD TO CATALOGUE'}
-                  <Sparkles size={16} />
-                </button>
-
-                {adminMessage && (
-                  <p className="admin-message" role="status">
-                    {adminMessage}
-                  </p>
-                )}
-              </form>
-
-              <div className="admin-preview">
-                <div className="eyebrow">PHOTO GUIDELINES</div>
-                <h3>Help the AI see the garment clearly.</h3>
-                <ul>
-                  <li>Photograph one product at a time.</li>
-                  <li>Show the complete garment.</li>
-                  <li>Use even lighting and a plain background.</li>
-                  <li>Avoid plastic wrapping and heavy shadows.</li>
-                  <li>Keep the fabric pattern visible.</li>
-                </ul>
-
-                {adminImage && (
-                  <div className="admin-image-preview">
-                    <img src={URL.createObjectURL(adminImage)} />
-                    <span>UPLOAD PREVIEW</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="admin-existing">
-              <div className="eyebrow">
-                CURRENT CATALOGUE · {catalog.length} ITEMS
-              </div>
-
-              <div className="admin-products">
-                {catalog.map(item => (
-                  <div className="admin-product" key={item.id}>
-                    <img src={imageUrl(item.image)} />
-                    <div>
-                      <b>{item.name}</b>
-                      <small>
-                        {item.category} · {item.color} · {money(item.price)}
-                      </small>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-        )}
-
-        {step === 'welcome' && (
-          <section className="welcome layout">
-            <div className="welcome-copy">
-              <div className="eyebrow">
-                <Sparkles size={14} />
-                A NEW WAY TO DISCOVER YOUR LOOK
-              </div>
-
-              <h1>
-                Your style.<br />
-                <em>Your moment.</em>
-              </h1>
-
-              <p>
-                Discover how a new outfit looks on you, without stepping
-                into a trial room. Just stand, capture, and explore.
+            <section className="woven-band">
+              <p className="band-big">Your photo stays in this shop.</p>
+              <p className="band-small">
+                Previews are made on this shop’s own computer, not on the internet. Your photo is erased from this
+                device when you finish, or after about two minutes without use.
               </p>
+            </section>
 
-              <div className="benefits">
-                <span><ScanFace /> Your look, your photo</span>
-                <span><Sparkles /> Explore different styles</span>
-                <span><ShieldCheck /> Private session</span>
-              </div>
-
-              <button
-                className="primary large"
-                onClick={() => setStep('consent')}
-              >
-                START YOUR EXPERIENCE <ChevronRight size={18} />
-              </button>
-
-              <small className="micro">
-                Takes about 30 seconds · No account needed
-              </small>
-            </div>
-
-            <div className="welcome-art">
-              <img src="https://images.unsplash.com/photo-1610030469983-98e550d6193c?auto=format&fit=crop&w=1200&q=90" />
-              <div className="art-note">
-                <span className="sparkle">✳</span>
-                <div>
-                  <b>Find the one</b>
-                  <small>Made for the way you wear it.</small>
-                </div>
-              </div>
-              <div className="art-stamp">
-                YOUR<br />STYLE<br />EDIT
-              </div>
-            </div>
-          </section>
+            <section className="close">
+              <h2 className="display" data-reveal>Ready when you are.</h2>
+              <TagButton label="Start fitting" icon={<ChevronRight size={20} aria-hidden="true" />} onClick={() => setStep('consent')} />
+            </section>
+          </div>
         )}
 
         {step === 'consent' && (
-          <section className="center-stage">
-            <div className="step-count">01 / 03</div>
-            <div className="round-icon"><ShieldCheck /></div>
-            <div className="eyebrow">YOUR PRIVACY MATTERS</div>
-            <h2>A quick note before we begin</h2>
-            <p className="muted">
-              We'll take one photo to create your virtual fitting.
-              Your photo is used for this session.
-            </p>
-
-            <label className="consent-row">
-              <input
-                type="checkbox"
-                checked={consent}
-                onChange={e => setConsent(e.target.checked)}
-              />
-              <span>
-                I consent to having my photo captured and processed
-                for this virtual try-on.
-              </span>
-            </label>
-
-            <button
-              className="primary"
-              disabled={!consent}
-              onClick={() => setStep('camera')}
-            >
-              CONTINUE TO CAMERA <ChevronRight size={18} />
-            </button>
-
-            <button className="text-btn" onClick={reset}>Cancel</button>
+          <section className="stage consent">
+            <div className="hang solo">
+              <div className="swing">
+                <span className="string" />
+                <div className="tag tone-paper consent-tag">
+                  <span className="eyelet" />
+                  <h2 className="display" data-split>Before we take your photo</h2>
+                  <p>We take one photo to make your previews. It stays on this shop’s computer and is erased when you finish.</p>
+                  <label className="check">
+                    <input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} />
+                    <span>I agree to having my photo taken and used for this try-on session.</span>
+                  </label>
+                  <TagButton label="Continue to camera" icon={<ChevronRight size={20} aria-hidden="true" />} disabled={!consent} onClick={() => setStep('camera')} />
+                  <button className="text-btn" onClick={reset}>Cancel</button>
+                </div>
+              </div>
+            </div>
           </section>
         )}
 
         {step === 'camera' && (
-          <section className="camera-layout">
+          <section className="stage camera">
             <div className="camera-copy">
-              <div className="step-count">01 / 03</div>
-              <div className="eyebrow">LET'S GET YOUR FIT</div>
-              <h2>Stand in front<br />of the mirror.</h2>
-              <p className="muted">
-                Position yourself inside the outline. Make sure your full
-                body is visible, with a little space around you.
-              </p>
-
+              <h2 className="display" data-split>Step back. Fit all of you in the frame.</h2>
               <ul className="tips">
-                <li><Check /> Face the camera directly</li>
-                <li><Check /> Keep your arms slightly away</li>
-                <li><Check /> Good, even lighting works best</li>
+                <li><Check size={18} aria-hidden="true" /> Face the camera with your arms slightly away from your body</li>
+                <li><Check size={18} aria-hidden="true" /> Feet in the frame, a little space above your head</li>
+                <li><Check size={18} aria-hidden="true" /> Even light from the front works best</li>
               </ul>
-
-              <button
-                className="primary"
-                disabled={!cameraReady}
-                onClick={capture}
-              >
-                <Camera size={18} /> CAPTURE MY PHOTO
+              <p className={`light light-${light || 'wait'}`} role="status">
+                <Sun size={18} aria-hidden="true" />
+                {light === 'good' ? 'Light looks good' : light === 'dark' ? 'Too dark. Move nearer a light.' : light === 'bright' ? 'Very bright. Turn away from windows.' : 'Checking the light…'}
+              </p>
+              <div className="camera-actions">
+                <TagButton label="Take photo in 3 s" icon={<Timer size={20} aria-hidden="true" />} disabled={!cameraReady || countdown !== null} onClick={() => setCountdown(3)} />
+                <button className="ghost-btn" disabled={!cameraReady || countdown !== null} onClick={snap}>
+                  <Camera size={18} aria-hidden="true" /> Take it now
+                </button>
+              </div>
+              <button className="text-btn" onClick={() => fileRef.current?.click()}>
+                <ImageUp size={18} aria-hidden="true" /> Upload a full-length photo instead
               </button>
-
-              <button
-                className="text-btn"
-                onClick={() => fileRef.current?.click()}
-              >
-                <ImageIcon size={16} /> Upload a photo instead
-              </button>
-
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*"
-                hidden
-                onChange={uploadPhoto}
-              />
+              <input ref={fileRef} type="file" accept="image/*" hidden onChange={uploadPhoto} />
             </div>
 
-            <div className="camera-frame">
+            <div className="lens">
               <video ref={videoRef} muted playsInline />
-              <div className="camera-overlay">
-                <div className="corner tl" />
-                <div className="corner tr" />
-                <div className="corner bl" />
-                <div className="corner br" />
-                <div className="guide">
-                  <span>KEEP YOUR FULL BODY IN FRAME</span>
-                </div>
+              {!cameraReady && <p className="lens-wait">Waiting for the camera…</p>}
+              <div className="lens-guide" aria-hidden="true">
+                <span className="corner tl" /><span className="corner tr" /><span className="corner bl" /><span className="corner br" />
+                <span className="silhouette" />
               </div>
-
-              <div className="camera-bottom">
-                <span><i /> LIVE CAMERA</span>
-                <span>PORTRAIT · FULL LENGTH</span>
-              </div>
+              {countdown > 0 && <span key={countdown} className="countdown" aria-live="assertive">{countdown}</span>}
+              <div className="lens-foot"><span><i aria-hidden="true" /> Live camera</span><span>Full length</span></div>
             </div>
           </section>
         )}
 
         {step === 'catalog' && (
-          <section className="catalog-layout">
-            <div className="catalog-heading">
+          <section className="stage rack">
+            <header className="rack-head">
               <div>
-                <div className="step-count">02 / 03</div>
-                <div className="eyebrow">EXPLORE THE COLLECTION</div>
-                <h2>Which look feels like you?</h2>
-                <p className="muted">
-                  Try one product on its own, or build a complete look with a shirt and pants.
-                </p>
-              </div>
-
-              <div className="photo-thumb">
-                {photo && <img src={URL.createObjectURL(photo)} />}
-                <span><Check size={13} /> PHOTO CAPTURED</span>
-              </div>
-            </div>
-
-            <div style={{display:'flex', gap:10, flexWrap:'wrap', margin:'20px 0 12px'}}>
-              <button className={selectionMode === 'individual' ? 'primary' : 'secondary'} onClick={() => setSelectionMode('individual')}>INDIVIDUAL TRY-ON</button>
-              <button className={selectionMode === 'outfit' ? 'primary' : 'secondary'} onClick={() => setSelectionMode('outfit')}>BUILD COMPLETE OUTFIT</button>
-            </div>
-            {selectionMode === 'outfit' && (
-              <div style={{display:'flex', gap:12, flexWrap:'wrap', margin:'8px 0 16px'}}>
-                <div style={{padding:'12px 16px', border:'1px solid #d9c9bf', borderRadius:8, minWidth:210}}>
-                  <small style={{display:'block', color:'#8b6b5b'}}>SELECTED SHIRT</small>
-                  <b>{selectedTop?.name || 'Choose a shirt below'}</b>
+                <h2 className="display" data-split>Pick something to try</h2>
+                <div className="mode-switch" role="group" aria-label="What to try">
+                  <button aria-pressed={mode === 'single'} onClick={() => setMode('single')}>One piece</button>
+                  <button aria-pressed={mode === 'outfit'} onClick={() => setMode('outfit')}>Full outfit</button>
                 </div>
-                <div style={{padding:'12px 16px', border:'1px solid #d9c9bf', borderRadius:8, minWidth:210}}>
-                  <small style={{display:'block', color:'#8b6b5b'}}>SELECTED PANTS</small>
-                  <b>{selectedBottom?.name || 'Choose pants below'}</b>
-                </div>
-              </div>
-            )}
-            <div style={{display:'flex', gap:12, flexWrap:'wrap', margin:'22px 0 8px'}}>
-              <label style={{fontSize:12, color:'#76675e'}}>
-                Department&nbsp;
-                <select value={departmentFilter} onChange={e => {setDepartmentFilter(e.target.value); setCategoryFilter('all');}}>
-                  <option value="all">All departments</option>
-                  <option value="men">Men</option>
-                  <option value="women">Women</option>
-                  <option value="kids">Kids</option>
-                  <option value="footwear">Footwear</option>
-                </select>
-              </label>
-              <label style={{fontSize:12, color:'#76675e'}}>
-                Category&nbsp;
-                <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}>
-                  <option value="all">All categories</option>
-                  {availableCategories.map(category => <option key={category} value={category}>{category}</option>)}
-                </select>
-              </label>
-              <span style={{fontSize:12, color:'#96877e', alignSelf:'center'}}>{visibleCatalog.length} products</span>
-            </div>
-
-            {catalog.length === 0 ? (
-              <div className="empty-catalog">
-                <ImageIcon size={32} />
-                <h3>No products available yet</h3>
-                <p>Please add products through Catalogue Admin.</p>
-              </div>
-            ) : (
-              <>
-                {visibleCatalog.length === 0 ? (
-                  <p className="muted">No products match these filters.</p>
-                ) : (
-                <div className="product-grid">
-                  {visibleCatalog.map(product => (
-                    <button
-                      key={product.id}
-                      className={`product-card ${
-                        (selectionMode === 'individual' && selected?.id === product.id) ||
-                        (selectionMode === 'outfit' && (selectedTop?.id === product.id || selectedBottom?.id === product.id)) ? 'selected' : ''
-                      }`}
-                      onClick={() => {
-                        if (selectionMode === 'individual') setSelected(product);
-                        else if (product.tryon_category === 'tops') setSelectedTop(product);
-                        else if (product.tryon_category === 'bottoms') setSelectedBottom(product);
-                        else setError('Choose a shirt or pants for a two-piece outfit.');
-                      }}
-                    >
-                      <div className="product-image">
-                        <img src={imageUrl(product.image)} />
-                        <span className="select-mark">
-                          {(selectionMode === 'individual' && selected?.id === product.id) ||
-                           (selectionMode === 'outfit' && selectedTop?.id === product.id) ? <Check size={15} /> :
-                           (selectionMode === 'outfit' && selectedBottom?.id === product.id) ? <span>2</span> : <span />}
-                        </span>
-                      </div>
-
-                      <div className="product-info">
-                        <div>
-                          <b>{product.name}</b>
-                          <small>{product.category} · {product.color}</small>
-                        </div>
-                        <strong>{money(product.price)}</strong>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-                )}
-
-                <div className="catalog-footer">
-                  <button
-                    className="text-btn"
-                    onClick={() => setStep('camera')}
-                  >
-                    <ChevronLeft size={16} /> Retake photo
-                  </button>
-
-                  <div className="catalog-navigation">
-                    <button
-                      className="secondary"
-                      onClick={previousDress}
-                      disabled={visibleCatalog.length < 2}
-                    >
-                      <ChevronLeft size={17} /> Previous
-                    </button>
-
-                    <button
-                      className="secondary next-dress"
-                      onClick={nextDress}
-                      disabled={visibleCatalog.length < 2}
-                    >
-                      NEXT PRODUCT <ChevronRight size={17} />
-                    </button>
-
-                    {selectionMode === 'individual' ? (
-                      <button className="primary" disabled={!selected || !selected.tryon_category} onClick={() => generate(selected)}>
-                        TRY THIS PRODUCT <Sparkles size={17} />
+                <div className="filters">
+                  <div className="dept-tabs" role="group" aria-label="Department">
+                    {DEPARTMENTS.map(([id, label]) => (
+                      <button key={id} className={`dept tone-${id === 'all' ? 'weave' : tone(id)}`} aria-pressed={department === id}
+                        onClick={() => { setDepartment(id); setCategory('all'); }}>
+                        {label}
                       </button>
-                    ) : (
-                      <button className="primary" disabled={!selectedTop || !selectedBottom} onClick={generateOutfit}>
-                        TRY COMPLETE OUTFIT <Sparkles size={17} />
-                      </button>
-                    )}
+                    ))}
+                  </div>
+                  {categories.length > 1 && (
+                    <div className="cat-chips" role="group" aria-label="Category">
+                      <button aria-pressed={category === 'all'} onClick={() => setCategory('all')}>All</button>
+                      {categories.map(([key, label]) => (
+                        <button key={key} aria-pressed={category === key} onClick={() => setCategory(key)}>{label}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <figure className="hang you-tag">
+                <div className="swing">
+                  <span className="string" />
+                  <div className="tag tone-paper">
+                    <span className="eyelet" />
+                    {photoUrl && <img src={photoUrl} alt="Your photo" />}
+                    <button className="text-btn" onClick={() => setStep('camera')}>Retake</button>
                   </div>
                 </div>
-              </>
+              </figure>
+            </header>
+
+            {mode === 'outfit' && (
+              <div className="hooks">
+                {[['Top', top, 'a top'], ['Bottoms', bottom, 'bottoms']].map(([label, item, ask]) => (
+                  <div key={label} className={`hook ${item ? 'filled' : ''}`}>
+                    <span className="hook-label">{label}</span>
+                    {item ? <><img src={imageUrl(item.image)} alt="" /><b>{item.name}</b></> : <em>Pick {ask} below</em>}
+                  </div>
+                ))}
+              </div>
             )}
+
+            {catalog.length === 0 ? (
+              <div className="empty">
+                <h3>The rail is empty</h3>
+                <p>Ask our staff to add products, or check that the fitting computer is running.</p>
+              </div>
+            ) : visible.length === 0 ? (
+              <div className="empty"><h3>Nothing here yet</h3><p>Try another department.</p></div>
+            ) : (
+              <ul className="tag-grid">
+                {visible.map(item => {
+                  const on = isOn(item);
+                  return (
+                    <li key={item.id} id={`p-${item.id}`} className={`product ${on ? 'on' : ''}`}>
+                      <div className="swing">
+                        <span className="string" />
+                        <button className={`tag product-tag tone-${tone(item.department)}`} aria-pressed={on} onClick={() => choose(item)}>
+                          <span className="eyelet" />
+                          <span className="stub">{TYPE_LABEL[item.tryon_category] || 'Display only'}</span>
+                          <span className="product-img"><img src={imageUrl(item.image)} alt="" loading="lazy" /></span>
+                          <span className="product-name">{item.name}</span>
+                          <span className="product-meta">{cap(item.category.trim())}, {item.color?.toLowerCase()}</span>
+                          <span className="product-price"><b>{priceLabel(item.price)}</b><small>{item.id}</small></span>
+                          {on && (
+                            <span className="picked">
+                              <Check size={14} aria-hidden="true" />
+                              {mode === 'outfit' ? TYPE_LABEL[item.tryon_category] : 'Picked'}
+                            </span>
+                          )}
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+
+            <div className="rack-bar">
+              <button className="text-btn on-dark bar-retake" onClick={() => setStep('camera')}>
+                <ChevronLeft size={18} aria-hidden="true" /> Retake photo
+              </button>
+              {mode === 'single' ? (
+                <div className="cycle">
+                  <button className="round-btn" onClick={() => cycle(-1)} aria-label="Previous piece" disabled={visible.filter(i => i.tryon_category).length < 2}>
+                    <ChevronLeft size={20} />
+                  </button>
+                  <span className="bar-pick">
+                    {selected?.tryon_category ? <>{selected.name}<small>{priceLabel(selected.price)}</small></> : selected ? 'Footwear can’t be tried on yet' : 'Pick a piece'}
+                  </span>
+                  <button className="round-btn" onClick={() => cycle(1)} aria-label="Next piece" disabled={visible.filter(i => i.tryon_category).length < 2}>
+                    <ChevronRight size={20} />
+                  </button>
+                </div>
+              ) : (
+                <span className="bar-pick">
+                  {top && bottom ? <>{top.name} + {bottom.name}<small>{priceLabel(outfitPrice)}</small></> : 'Pick a top and bottoms'}
+                </span>
+              )}
+              <label className="switch">
+                <input type="checkbox" checked={sharper} onChange={e => setSharper(e.target.checked)} />
+                <span>Sharper <span className="switch-more">result </span>(slower)</span>
+              </label>
+              <TagButton
+                label={mode === 'single' ? 'Try it on' : 'Try the outfit'}
+                disabled={!canTry}
+                onClick={() => fit(mode === 'single' ? [selected] : [top, bottom])}
+              />
+            </div>
           </section>
         )}
 
         {step === 'processing' && (
-          <section className="center-stage processing">
-            <div className="processing-visual">
-              <div className="scan-line" />
-              <img src={photo ? URL.createObjectURL(photo) : ''} />
-              <div className="processing-spark"><Sparkles /></div>
-            </div>
-
-            <div className="eyebrow">CREATING YOUR LOOK</div>
-            <h2>A little magic<br />is happening.</h2>
-            <p className="muted">
-              We're preparing your virtual fitting. This can take a little while.
-            </p>
-            <div className="progress"><span /></div>
-            <small className="micro">PLEASE KEEP THIS SCREEN OPEN</small>
-          </section>
-        )}
-
-        {step === 'result' && (
-          <section className="result-layout">
-            <div className="result-heading">
-              <div>
-                <div className="eyebrow">
-                  <Sparkles size={14} /> YOUR VIRTUAL LOOK
+          <section className="stage fitting">
+            <div className="hang solo fitting-photo">
+              <div className="swing">
+                <span className="string" />
+                <div className="tag tone-paper">
+                  <span className="eyelet" />
+                  {photoUrl && <img src={photoUrl} alt="Your photo" />}
+                  <span className="stitch-run" aria-hidden="true" />
                 </div>
-                <h2>There you are.</h2>
-                <p className="muted">
-                  {resultLabel || selected?.name} · {money(resultPrice || selected?.price || 0)}
-                </p>
               </div>
-
-              <button className="icon-btn" onClick={reset}>
-                <X />
+            </div>
+            <div className="fitting-copy">
+              <h2 className="display" aria-live="polite">
+                {busy?.total > 1 ? `Fitting piece ${busy.pass} of ${busy.total}` : 'Fitting your look'}
+              </h2>
+              <p className="fitting-item">{busy?.item.name}</p>
+              <div className="stitch-progress" role="progressbar" aria-label="Making your preview" />
+              <p className="muted">
+                {elapsed < 60 ? `${elapsed} s` : `${Math.floor(elapsed / 60)} min ${elapsed % 60} s`} so far. The first
+                try of the day takes longer while the fitting computer warms up.
+              </p>
+              <button className="ghost-btn" onClick={() => abortRef.current?.abort()}>
+                <ChevronLeft size={18} aria-hidden="true" /> Stop and go back
               </button>
             </div>
-
-            <div className="result-stage">
-              <div className="result-person">
-                <img src={result} />
-                <span className="result-tag">YOUR TRY-ON</span>
-              </div>
-
-              <aside className="result-details">
-                <div className="eyebrow">THE LOOK</div>
-                <h3>{resultLabel || selected?.name}</h3>
-                <p>{selectionMode === 'outfit' ? 'Complete outfit preview generated in two sequential AI passes.' : selected?.description}</p>
-                <strong className="price-large">
-                  {money(resultPrice || selected?.price || 0)}
-                </strong>
-
-                <div className="detail-rule" />
-
-                <p className="muted small">
-                  Love this look? Ask our team to help you find it in store.
-                </p>
-
-                <button
-                  className="primary full"
-                  onClick={() => setStep('catalog')}
-                >
-                  <RefreshCw size={17} /> TRY ANOTHER PRODUCT
-                </button>
-
-                <button className="secondary full" onClick={reset}>
-                  FINISH SESSION
-                </button>
-              </aside>
-            </div>
-
-            <div className="result-disclaimer">
-              AI-generated preview. Actual garment appearance, draping,
-              colour and fit may vary.
-            </div>
           </section>
         )}
 
-        {error && (
-          <div className="toast" role="alert">
-            {error}
-            <button onClick={() => setError('')}>
-              <X size={15} />
-            </button>
-          </div>
+        {step === 'result' && active && (
+          <section className="stage result">
+            <div className="result-stage">
+              {comparing && compare ? (
+                <div className="compare">
+                  {[active, compare].map(look => (
+                    <figure key={look.id}>
+                      <img src={look.url} alt={`You wearing ${lookName(look)}`} />
+                      <figcaption>{lookName(look)}</figcaption>
+                    </figure>
+                  ))}
+                </div>
+              ) : (
+                <BeforeAfter before={photoUrl} after={active.url} label={lookName(active)} />
+              )}
+            </div>
+
+            <aside className="hang solo look">
+              <div className="swing">
+                <span className="string" />
+                <div className="tag tone-paper look-tag perf-bottom">
+                  <span className="eyelet" />
+                  <h2 className="display" data-split>That’s you.</h2>
+                  <ul className="look-items">
+                    {active.items.map(item => (
+                      <li key={item.id} className={`tone-${tone(item.department)}`}>
+                        <span className="dot" aria-hidden="true" />
+                        <div>
+                          <b>{item.name}</b>
+                          <small>{TYPE_LABEL[item.tryon_category]}. {priceLabel(item.price)}</small>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="look-actions">
+                    <TagButton label="Try something else" icon={<RefreshCw size={18} aria-hidden="true" />} onClick={() => setStep('catalog')} />
+                    <button className="ghost-btn" onClick={() => fit(active.items, Math.floor(Math.random() * 1e9))}>
+                      <Shuffle size={18} aria-hidden="true" /> New variation
+                    </button>
+                    <button className="ghost-btn" aria-pressed={active.kept} onClick={() => toggleKeep(active.id)}>
+                      <Heart size={18} aria-hidden="true" fill={active.kept ? 'currentColor' : 'none'} />
+                      {active.kept ? 'Kept' : 'Keep this look'}
+                    </button>
+                  </div>
+                  <button className="text-btn" onClick={reset}>Finish and erase my photo</button>
+                </div>
+                <div className="tear">
+                  <p className="tear-label">Show this stub to our staff. They’ll bring your size to try.</p>
+                  {active.items.map(item => (
+                    <div key={item.id} className="tear-code">
+                      <Barcode code={item.id} />
+                      <span className="tear-name">{item.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </aside>
+
+            <p className="disclaimer">AI preview. Real fabric, drape, colour and fit can differ, so try your size before you buy.</p>
+
+            {looks.length > 1 && (
+              <div className="session">
+                <div className="session-head">
+                  <h3>Your looks <span className="count">{looks.length}</span></h3>
+                  <button className="ghost-btn" aria-pressed={comparing} onClick={toggleCompare}>
+                    <Columns2 size={18} aria-hidden="true" /> {comparing ? 'Stop comparing' : 'Compare two'}
+                  </button>
+                </div>
+                {comparing && <p className="fine">Tap another look to see it beside this one.</p>}
+                <ul className="session-row">
+                  {looks.map(look => (
+                    <li key={look.id} className={`look-hang ${look.id === activeId ? 'on' : ''} ${comparing && look.id === compareId ? 'vs' : ''}`}>
+                      <div className="swing">
+                        <span className="string" />
+                        <button className="tag tone-paper session-tag" aria-pressed={look.id === activeId} onClick={() => pickLook(look.id)}>
+                          <span className="eyelet" />
+                          <img src={look.url} alt="" />
+                          <span>{lookName(look)}</span>
+                          {look.kept && <Heart className="kept" size={16} fill="currentColor" aria-label="Kept" />}
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
+        )}
+
+        {step === 'admin' && (
+          <Admin catalog={catalog} reload={loadCatalog} health={health} pin={pin} setPin={setPin} onExit={() => setStep('welcome')} />
         )}
       </main>
 
-      <footer>
-        <span>VESTIQ · VIRTUAL FITTING STUDIO</span>
-        <span>CRAFTED FOR YOUR MOMENT <Heart size={12} /></span>
+      <footer className="foot">
+        <span>Vestiq virtual fitting room</span>
+        <span>AI previews made in store. Ask our staff for sizes.</span>
       </footer>
+
+      {error && (
+        <div className="toast" role="alert">
+          <span>{error}</span>
+          <button onClick={() => setError('')} aria-label="Dismiss"><X size={18} /></button>
+        </div>
+      )}
+
+      {helpOpen && <Help onClose={() => setHelpOpen(false)} />}
+
+      {idleLeft !== null && (
+        <div className="sheet-backdrop idle" role="alertdialog" aria-modal="true" aria-labelledby="idle-title">
+          <div className="hang solo">
+            <div className="swing">
+              <span className="string" />
+              <div className="tag tone-kids idle-tag">
+                <span className="eyelet" />
+                <h2 id="idle-title" className="display">Still trying things on?</h2>
+                <p>This session ends in <b className="idle-count">{idleLeft}</b> seconds and your photo will be erased.</p>
+                <TagButton label="I’m still here" autoFocus onClick={() => { lastActive.current = Date.now(); setIdleLeft(null); }} />
+                <button className="text-btn" onClick={reset}>End session now</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BeforeAfter({ before, after, label }) {
+  const [pos, setPos] = useState(0);
+  return (
+    <div className="ba" style={{ '--pos': `${pos}%` }}>
+      <img src={after} alt={`You wearing ${label}`} />
+      <div className="ba-before"><img src={before} alt="Your original photo" /></div>
+      <span className="ba-handle" aria-hidden="true"><span><ChevronLeft size={16} /><ChevronRight size={16} /></span></span>
+      <input type="range" min="0" max="100" value={pos} onChange={e => setPos(Number(e.target.value))}
+        aria-label="Drag to compare with your original photo" data-lenis-prevent />
+      <span className="ba-chip before-chip" aria-hidden="true">Your photo</span>
+      <span className="ba-chip after-chip" aria-hidden="true">Preview</span>
+    </div>
+  );
+}
+
+function Help({ onClose }) {
+  const closeRef = useRef(null);
+  useEffect(() => {
+    closeRef.current?.focus();
+    const key = e => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [onClose]);
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <aside className="care-label" role="dialog" aria-modal="true" aria-labelledby="help-title" onClick={e => e.stopPropagation()} data-lenis-prevent>
+        <button ref={closeRef} className="sheet-close" onClick={onClose} aria-label="Close help"><X size={20} /></button>
+        <h2 id="help-title" className="display">How it works</h2>
+        <ol className="care-steps">
+          <li><b>Take one photo.</b> Stand back so your whole body fits, facing the camera. You can upload a full-length photo instead.</li>
+          <li><b>Pick from the rail.</b> Try one piece, or choose “Full outfit” to put a top and bottoms together.</li>
+          <li><b>See it on you.</b> Drag across the picture to compare with your photo. Keep the looks you like and show their codes to our staff.</li>
+        </ol>
+        <h3>Good to know</h3>
+        <ul className="care-notes">
+          <li>Previews are made by AI. Fabric, drape, colour and fit can differ from the real garment.</li>
+          <li>Footwear can’t be tried on yet.</li>
+          <li>Your photo stays on this shop’s computer and is erased when you finish, or after about two minutes without use.</li>
+        </ul>
+      </aside>
     </div>
   );
 }
