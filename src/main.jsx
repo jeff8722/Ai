@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createRoot } from 'react-dom/client';
 import {
   Camera, Check, ChevronLeft, ChevronRight, CircleHelp, Columns2, Heart,
-  ImageUp, RefreshCw, Shuffle, Sun, Timer, X
+  ImageUp, RefreshCw, Ruler, Shuffle, Sun, Timer, X
 } from 'lucide-react';
 import '@fontsource-variable/bricolage-grotesque/standard.css';
 import '@fontsource/libre-barcode-39-text/400.css';
@@ -10,6 +10,7 @@ import './styles.css';
 import { gsap, ScrollTrigger, SplitText, getLenis, magnetic, reduced, scrollTop } from './motion';
 import Admin from './Admin';
 import { API, Barcode, Hanger, TYPE_LABEL, TagButton, imageUrl, priceLabel, tone, useObjectUrl } from './ui';
+import { FITS, recommendSize } from './size';
 
 const IDLE_MS = 90_000; // quiet time before the "still there?" tag drops
 const IDLE_GRACE = 15; // seconds of warning before the session erases itself
@@ -19,8 +20,8 @@ const DEPARTMENTS = [['all', 'Everything'], ['men', 'Men'], ['women', 'Women'], 
 const HERO = [['Try', 'women', 'one photo'], ['it', 'kids', 'any piece on our rail'], ['on.', 'men', 'no trial room queue']];
 const HOW = [
   ['Take one photo', 'Stand back so your whole body fits, or upload a full-length photo.'],
-  ['Choose from the rail', 'Try a single piece, or put a top and bottoms together as an outfit.'],
-  ['See it on you', 'Your look appears after a short wait. Keep the ones you like and show the tag to our staff.']
+  ['Choose from the rail', 'Try a single piece or a saree, or put a top and bottoms together as an outfit.'],
+  ['See it on you', 'Your look appears after a short wait. Keep the ones you like, find your size, and show the tag to our staff.']
 ];
 
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
@@ -54,6 +55,8 @@ function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [idleLeft, setIdleLeft] = useState(null);
   const [pin, setPin] = useState('');
+  const [body, setBody] = useState(null); // height/weight for the size guide, kept only in memory
+  const [sizeOpen, setSizeOpen] = useState(false);
 
   const rootRef = useRef(null);
   const videoRef = useRef(null);
@@ -134,6 +137,8 @@ function App() {
     setConsent(false);
     setIdleLeft(null);
     setPin('');
+    setBody(null);
+    setSizeOpen(false);
     setHelpOpen(false);
     setError('');
     setStep('welcome');
@@ -826,16 +831,23 @@ function App() {
                   <span className="eyelet" />
                   <h2 className="display" data-split>That’s you.</h2>
                   <ul className="look-items">
-                    {active.items.map(item => (
-                      <li key={item.id} className={`tone-${tone(item.department)}`}>
-                        <span className="dot" aria-hidden="true" />
-                        <div>
-                          <b>{item.name}</b>
-                          <small>{TYPE_LABEL[item.tryon_category]}. {priceLabel(item.price)}</small>
-                        </div>
-                      </li>
-                    ))}
+                    {active.items.map(item => {
+                      const size = body && recommendSize(item, body);
+                      return (
+                        <li key={item.id} className={`tone-${tone(item.department)}`}>
+                          <span className="dot" aria-hidden="true" />
+                          <div>
+                            <b>{item.name}</b>
+                            <small>{TYPE_LABEL[item.tryon_category]}. {priceLabel(item.price)}</small>
+                            {size && <span className="size-pill">Your size: {size}</span>}
+                          </div>
+                        </li>
+                      );
+                    })}
                   </ul>
+                  {sizeOpen && (
+                    <SizeFinder body={body} onSave={b => { setBody(b); setSizeOpen(false); }} onClose={() => setSizeOpen(false)} />
+                  )}
                   <div className="look-actions">
                     <TagButton label="Try something else" icon={<RefreshCw size={18} aria-hidden="true" />} onClick={() => setStep('catalog')} />
                     <button className="ghost-btn" onClick={() => fit(active.items, Math.floor(Math.random() * 1e9))}>
@@ -845,17 +857,26 @@ function App() {
                       <Heart size={18} aria-hidden="true" fill={active.kept ? 'currentColor' : 'none'} />
                       {active.kept ? 'Kept' : 'Keep this look'}
                     </button>
+                    {!sizeOpen && (
+                      <button className="ghost-btn" onClick={() => setSizeOpen(true)}>
+                        <Ruler size={18} aria-hidden="true" /> {body ? 'Change my size details' : 'Find my size'}
+                      </button>
+                    )}
                   </div>
                   <button className="text-btn" onClick={reset}>Finish and erase my photo</button>
                 </div>
                 <div className="tear">
                   <p className="tear-label">Show this stub to our staff. They’ll bring your size to try.</p>
-                  {active.items.map(item => (
-                    <div key={item.id} className="tear-code">
-                      <Barcode code={item.id} />
-                      <span className="tear-name">{item.name}</span>
-                    </div>
-                  ))}
+                  {active.items.map(item => {
+                    const size = body && recommendSize(item, body);
+                    return (
+                      <div key={item.id} className="tear-code">
+                        <Barcode code={item.id} />
+                        <span className="tear-name">{item.name}</span>
+                        {size && <b className="tear-size">Size: {size}</b>}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </aside>
@@ -945,6 +966,47 @@ function BeforeAfter({ before, after, label }) {
   );
 }
 
+function SizeFinder({ body, onSave, onClose }) {
+  const [ft, setFt] = useState(body?.ft ?? '');
+  const [inch, setInch] = useState(body?.inch ?? '');
+  const [weight, setWeight] = useState(body?.weight ?? '');
+  const [fit, setFit] = useState(body?.fit ?? 'regular');
+  function submit(event) {
+    event.preventDefault();
+    const height = Number(ft) * 30.48 + (Number(inch) || 0) * 2.54;
+    onSave({ ft, inch, weight: Number(weight), height, fit });
+  }
+  return (
+    <form className="size-finder" onSubmit={submit}>
+      <h3>Find my size</h3>
+      <div className="size-fields">
+        <label className="field">
+          <span>Height (ft)</span>
+          <input type="number" inputMode="numeric" min="2" max="7" required autoFocus value={ft} onChange={e => setFt(e.target.value)} placeholder="5" />
+        </label>
+        <label className="field">
+          <span>(in)</span>
+          <input type="number" inputMode="numeric" min="0" max="11" value={inch} onChange={e => setInch(e.target.value)} placeholder="6" />
+        </label>
+        <label className="field">
+          <span>Weight (kg)</span>
+          <input type="number" inputMode="numeric" min="10" max="250" required value={weight} onChange={e => setWeight(e.target.value)} placeholder="60" />
+        </label>
+      </div>
+      <div className="mode-switch" role="group" aria-label="How you like clothes to fit">
+        {FITS.map(f => (
+          <button key={f} type="button" aria-pressed={fit === f} onClick={() => setFit(f)}>{cap(f)}</button>
+        ))}
+      </div>
+      <div className="look-actions">
+        <TagButton label="Show my size" type="submit" />
+        <button type="button" className="text-btn" onClick={onClose}>Not now</button>
+      </div>
+      <p className="fine">A guide from your height and weight. It stays on this device and is erased with your photo.</p>
+    </form>
+  );
+}
+
 function Help({ onClose }) {
   const closeRef = useRef(null);
   useEffect(() => {
@@ -967,6 +1029,8 @@ function Help({ onClose }) {
         <ul className="care-notes">
           <li>Previews are made by AI. Fabric, drape, colour and fit can differ from the real garment.</li>
           <li>Footwear can’t be tried on yet.</li>
+          <li>Sarees are tried on whole, as one piece. The AI’s drape is close but not exact, so ask our staff to drape the real one.</li>
+          <li>“Find my size” guesses from your height and weight. Sizes vary by brand, so our staff will check before you buy.</li>
           <li>Your photo stays on this shop’s computer and is erased when you finish, or after about two minutes without use.</li>
         </ul>
       </aside>

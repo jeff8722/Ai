@@ -1,4 +1,6 @@
-"""Quick local try-on check: python try_local.py <person image> [garment image] [category] [steps]
+"""Quick local try-on check: python try_local.py <person image> [garment image] [category] [steps] [flat-lay|model]
+
+Sarees: pass one-pieces and model, with a photo of the saree draped on a model or mannequin.
 
 Writes try_local_result.png next to this file and prints the time and peak GPU memory.
 """
@@ -16,6 +18,7 @@ person_path = Path(sys.argv[1]) if len(sys.argv) > 1 else HERE / "test-images" /
 garment_path = Path(sys.argv[2]) if len(sys.argv) > 2 else HERE / "catalog" / "images" / "men-navy-shirt.jpg"
 category = sys.argv[3] if len(sys.argv) > 3 else "tops"
 steps = int(sys.argv[4]) if len(sys.argv) > 4 else 20
+photo_type = sys.argv[5] if len(sys.argv) > 5 else GARMENT_PHOTO_TYPE
 
 from fashn_vton import TryOnPipeline  # noqa: E402
 
@@ -30,7 +33,7 @@ result = pipe(
     person_image=Image.open(person_path).convert("RGB"),
     garment_image=Image.open(garment_path).convert("RGB"),
     category=category,
-    garment_photo_type=GARMENT_PHOTO_TYPE,
+    garment_photo_type=photo_type,
     num_samples=1,
     num_timesteps=steps,
     guidance_scale=1.5,

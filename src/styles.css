@@ -618,6 +618,13 @@ button.tag:focus-visible { outline: none; }
 /* Code 39 symbols run about 0.48em wide: size the font so the bars fill the stub, capped for short codes */
 .barcode { max-width: 100%; overflow: hidden; font-family: var(--barcode); font-size: min(5rem, calc(100cqw * 2.05 / var(--n, 10))); line-height: 1; white-space: nowrap; }
 .look-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+/* size guide: a dashed panel on the look tag, like the consent check */
+.size-pill { display: inline-block; margin-top: 8px; padding: 4px 12px; border-radius: 999px; background: var(--ink); color: #fff; font-size: 0.92rem; font-weight: 700; }
+.size-finder { width: 100%; display: grid; gap: 14px; padding: 18px; border: 1.5px dashed var(--ink-2); border-radius: 6px; }
+.size-finder h3 { font-size: 1.3rem; font-weight: 800; font-stretch: 75%; text-transform: uppercase; }
+.size-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.size-finder .mode-switch { justify-self: start; }
+.tear-size { font-size: 1.1rem; }
 .disclaimer { grid-column: 1; font-size: 0.9rem; color: var(--ink-2); }
 .session { grid-column: 1 / -1; padding-top: 24px; border-top: 1.5px dashed var(--ink-2); display: grid; gap: 12px; }
 .session-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }

@@ -16,6 +16,14 @@ def test_category_guess():
     assert main.guess_tryon_category("footwear", "Sneakers") is None
 
 
+def test_sarees():
+    assert main.guess_tryon_category("women", "Silk Sarees") == "one-pieces"
+    assert main.guess_tryon_category("women", "Kanjivaram sari") == "one-pieces"
+    assert main.garment_photo_type_for("Sarees") == "model"
+    assert main.garment_photo_type_for("Ethnic", "Banarasi saree") == "model"
+    assert main.garment_photo_type_for("Safari jackets") == main.GARMENT_PHOTO_TYPE
+
+
 def test_staff_pin_guards_catalogue():
     assert client.post("/api/admin/check").status_code == 401
     assert client.post("/api/admin/check", headers={"X-Admin-Pin": "0000"}).status_code == 401
@@ -31,6 +39,7 @@ def test_health_and_products():
 
 if __name__ == "__main__":
     test_category_guess()
+    test_sarees()
     test_staff_pin_guards_catalogue()
     test_health_and_products()
     print("ok")

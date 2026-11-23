@@ -8,6 +8,7 @@ from starlette.concurrency import run_in_threadpool
 import importlib.util
 import io
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -38,11 +39,15 @@ WEIGHTS_DIR = Path(os.getenv("FASHN_VTON_WEIGHTS_DIR") or str(DEFAULT_MODEL_WEIG
 MODEL_CATEGORY = os.getenv("LOCAL_VTON_CATEGORY", "one-pieces")
 GARMENT_PHOTO_TYPE = os.getenv("LOCAL_VTON_GARMENT_PHOTO_TYPE", "flat-lay")
 NUM_TIMESTEPS = int(os.getenv("LOCAL_VTON_STEPS", "20"))
+# 1.5 = the model's default. 1.0 = guidance off: each step runs once instead of twice, about 2x faster.
+GUIDANCE = float(os.getenv("LOCAL_VTON_GUIDANCE", "1.5"))
 # Staff PIN for catalogue changes. Empty = catalogue admin stays open (old behaviour).
 ADMIN_PIN = os.getenv("ADMIN_PIN", "").strip()
 
 BOTTOM_WORDS = ("pant", "trouser", "jean", "bottom", "skirt", "short", "legging", "palazzo", "jogger", "chino", "cargo", "dhoti")
 ONE_PIECE_WORDS = ("dress", "gown", "saree", "lehenga", "kurta", "one-piece", "frock", "jumpsuit", "romper", "anarkali", "dungaree")
+# Same rule as isSaree in src/size.js: "Sarees", "Kanjivaram sari", "Half-saree"; not "safari" or "sarong".
+SAREE = re.compile(r"\bsar(ee|i)s?\b", re.IGNORECASE)
 
 app = FastAPI(title="VESTIQ Product & Virtual Try-On API", version="0.5.0")
 app.add_middleware(
@@ -91,12 +96,19 @@ def require_staff(pin: str | None):
 def guess_tryon_category(department: str, category: str) -> str | None:
     if department == "footwear":
         return None
+    if SAREE.search(category):
+        return "one-pieces"
     category_lower = category.lower()
     if any(word in category_lower for word in BOTTOM_WORDS):
         return "bottoms"
     if any(word in category_lower for word in ONE_PIECE_WORDS):
         return "one-pieces"
     return "tops"
+
+
+def garment_photo_type_for(category: str, name: str = "") -> str:
+    """A saree only has a shape once it is draped, so saree photos are read as worn by a model or mannequin."""
+    return "model" if SAREE.search(f"{category} {name}") else GARMENT_PHOTO_TYPE
 
 
 def model_status():
@@ -128,6 +140,16 @@ def get_pipeline():
                     weights_dir=str(WEIGHTS_DIR),
                     device=os.getenv("LOCAL_VTON_DEVICE") or None,
                 )
+                if GUIDANCE <= 1.0:
+                    model = _pipeline.tryon_model
+
+                    # The pipeline always runs a guided and an unguided pass; with guidance off the unguided one
+                    # is thrown away, so run only the guided pass (no mask = conditioned) and use it for both.
+                    def single_pass(*args, **kwargs):
+                        v = model.forward(*args, **{k: val for k, val in kwargs.items() if val is not None})["x"]
+                        return {"v_c": v, "v_u": v}
+
+                    model.forward_for_cfg = single_pass
     return _pipeline
 
 
@@ -137,12 +159,14 @@ def generate_local_tryon(
     category: str | None = None,
     steps: int = NUM_TIMESTEPS,
     seed: int = 42,
+    photo_type: str | None = None,
 ) -> bytes:
     # Product records store FASHN's category: tops, bottoms, or one-pieces.
     selected_category = category or MODEL_CATEGORY
     if selected_category not in {"tops", "bottoms", "one-pieces"}:
         raise ValueError("Try-on category must be tops, bottoms, or one-pieces.")
-    if GARMENT_PHOTO_TYPE not in {"model", "flat-lay"}:
+    photo_type = photo_type or GARMENT_PHOTO_TYPE
+    if photo_type not in {"model", "flat-lay"}:
         raise RuntimeError("LOCAL_VTON_GARMENT_PHOTO_TYPE must be model or flat-lay.")
 
     try:
@@ -160,10 +184,10 @@ def generate_local_tryon(
             person_image=person,
             garment_image=garment,
             category=selected_category,
-            garment_photo_type=GARMENT_PHOTO_TYPE,
+            garment_photo_type=photo_type,
             num_samples=1,
             num_timesteps=steps,
-            guidance_scale=1.5,
+            guidance_scale=GUIDANCE,
             seed=seed,
             segmentation_free=True,
         )
@@ -393,12 +417,12 @@ def archive_product(product_id: str, x_admin_pin: str | None = Header(None)):
         connection.close()
 
 
-def product_image_bytes(product_id: str) -> tuple[bytes, str | None]:
+def product_image_bytes(product_id: str) -> tuple[bytes, str | None, str]:
     """Read a catalogue garment straight from disk, so the browser doesn't download and re-upload it."""
     connection = get_db()
     try:
         row = connection.execute(
-            "SELECT image, tryon_category FROM products WHERE id = ? AND active = 1", (product_id,)
+            "SELECT image, tryon_category, category, name FROM products WHERE id = ? AND active = 1", (product_id,)
         ).fetchone()
     finally:
         connection.close()
@@ -407,7 +431,7 @@ def product_image_bytes(product_id: str) -> tuple[bytes, str | None]:
     path = (IMAGE_DIR / Path(row["image"]).name).resolve()
     if path.parent != IMAGE_DIR.resolve() or not path.is_file():
         raise HTTPException(status_code=404, detail="Product image is missing on the server.")
-    return path.read_bytes(), row["tryon_category"]
+    return path.read_bytes(), row["tryon_category"], garment_photo_type_for(row["category"], row["name"])
 
 
 @app.post("/api/try-on")
@@ -420,8 +444,9 @@ async def try_on(
     seed: int | None = Form(None),
 ):
     person = await person_image.read()
+    photo_type = None
     if product_id:
-        garment, product_category = product_image_bytes(product_id.strip())
+        garment, product_category, photo_type = product_image_bytes(product_id.strip())
         category = category or product_category
     else:
         garment = await garment_image.read() if garment_image else b""
@@ -452,6 +477,7 @@ async def try_on(
             category,
             steps,
             seed,
+            photo_type,
         )
         return Response(
             output,

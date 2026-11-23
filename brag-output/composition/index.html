@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VESTIQ ad</title>
+<link rel="stylesheet" href="../../node_modules/@fontsource-variable/bricolage-grotesque/standard.css">
+<link rel="stylesheet" href="../../node_modules/@fontsource/libre-barcode-39-text/400.css">
+<link rel="stylesheet" href="../../src/styles.css">
+<style>
+  /* every frame is a pure function of time: no CSS clocks */
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: var(--board); }
+  #frame { position: relative; width: 1920px; height: 1080px; overflow: hidden; background: var(--board); }
+  .layer { position: absolute; inset: 0; visibility: hidden; }
+  .w { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: .08em; margin-bottom: -.08em; }
+  .w > span { display: inline-block; will-change: transform; }
+
+  /* hero (the app's own shopfront, at full frame) */
+  #hero .fascia { position: absolute; left: 0; right: 0; top: 0; }
+  #hero .shopfront { position: absolute; left: 0; right: 0; top: 66px; }
+  #hero .hero-copy .lead { font-size: 34px; max-width: 30ch; line-height: 1.3; }
+  #hero .hero-copy .tag-btn { min-height: 72px; font-size: 1.45rem; padding-left: 60px; padding-right: 34px; }
+
+  /* woven full-frame labels */
+  .woven { background: var(--weave-tex), var(--weave); color: var(--on-weave); }
+  .woven .stitch { position: absolute; inset: 22px; border: 2px dashed rgb(255 255 255 / .22); }
+  .wm { font-weight: 800; font-stretch: 75%; text-transform: uppercase; letter-spacing: .16em; }
+  #woven .wm { position: absolute; left: 0; right: 0; top: 330px; text-align: center; font-size: 230px; line-height: 1; padding-left: .16em; }
+  #woven .tagline { position: absolute; left: 0; right: 0; top: 640px; text-align: center; font: 600 46px/1.2 var(--sans); color: var(--on-weave); }
+  #woven .thread { position: absolute; left: 50%; top: 0; width: 3px; height: 170px; margin-left: -1.5px; background: var(--thread); }
+  #privacy .big { position: absolute; left: 150px; top: 330px; width: 1500px; font-weight: 800; font-stretch: 75%; text-transform: uppercase; font-size: 150px; line-height: .86; }
+  #privacy .small { position: absolute; left: 150px; top: 720px; font: 500 44px/1.3 var(--sans); color: var(--on-weave-2); }
+
+  /* the tablet */
+  .device { position: absolute; left: 602px; top: 140px; width: 1254px; height: 800px; border-radius: 40px; background: #121212; box-shadow: 0 40px 70px rgb(22 22 22 / .22), 0 8px 18px rgb(22 22 22 / .16); }
+  .device .cam { position: absolute; left: 50%; top: 8px; width: 7px; height: 7px; margin-left: -3.5px; border-radius: 50%; background: #2c2c2c; }
+  .screen { position: absolute; left: 22px; top: 22px; width: 1210px; height: 756px; border-radius: 16px; overflow: hidden; background: var(--board); }
+  .scale { position: absolute; left: 0; top: 0; width: 1440px; height: 900px; transform: scale(.8403); transform-origin: 0 0; }
+  .scr { position: absolute; left: 0; top: 0; width: 1440px; height: 900px; overflow: hidden; background: var(--board); visibility: hidden; }
+  .scr-in { position: absolute; left: 0; top: 0; width: 1440px; height: 900px; }
+  #sc-looks .scr-in { height: auto; min-height: 900px; }
+  .scr .fascia { position: relative; }
+  .scr .rack-bar { position: absolute; left: 0; right: 0; bottom: 0; margin: 0; }
+  .scr .ba, .scr .compare { height: 744px; min-height: 0; }
+  .scr .lens { height: 700px; }
+  .scr .lens img.feed { width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1); }
+  .scr .countdown { visibility: hidden; }
+  .flash { position: absolute; inset: 0; background: #fff; opacity: 0; }
+  .tag-btn.pressed::before { transform: scaleX(1); }
+  .rack-bar .tag-btn.pressed { color: var(--ink); }
+  .scr .look .swing { --string: 34px; }
+  .scr .result .disclaimer { display: none; }
+  .tap { position: absolute; width: 96px; height: 96px; margin: -48px 0 0 -48px; border-radius: 50%; border: 5px solid #fff; background: rgb(255 255 255 / .28); box-shadow: 0 0 0 2px rgb(22 22 22 / .35), 0 10px 24px rgb(0 0 0 / .22); visibility: hidden; }
+
+  /* captions beside the tablet */
+  .cap-bg { position: absolute; left: 0; top: 0; bottom: 0; width: 560px; background: var(--board); z-index: 2; }
+  .device { z-index: 1; }
+  .cap { position: absolute; left: 96px; top: 300px; width: 420px; visibility: hidden; z-index: 3; }
+  .cap-n { font-weight: 800; font-stretch: 75%; font-size: 150px; line-height: .8; color: var(--thread); }
+  .cap-t { margin-top: 26px; font-weight: 800; font-stretch: 75%; text-transform: uppercase; font-size: 88px; line-height: .88; letter-spacing: -.01em; color: var(--ink); }
+  .cap-s { position: absolute; left: 96px; width: 420px; z-index: 3; font: 500 32px/1.3 var(--sans); color: var(--ink-2); visibility: hidden; }
+
+  /* outro */
+  #outro .rail-o { position: absolute; left: 260px; right: 260px; top: 150px; height: 10px; border-radius: 5px; background: linear-gradient(#d5d9de, #868c93); box-shadow: 0 3px 6px rgb(0 0 0 / .18); }
+  #outro .tags-o { position: absolute; left: 0; right: 0; top: 155px; display: flex; justify-content: center; gap: 30px; align-items: flex-start; --t-hero: 170px; }
+  #outro .wm { position: absolute; left: 0; right: 0; top: 650px; text-align: center; font-size: 120px; line-height: 1; color: var(--ink); padding-left: .16em; }
+  #outro .tagline { position: absolute; left: 0; right: 0; top: 795px; text-align: center; font: 600 40px/1.2 var(--sans); color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div id="frame">
+
+  <!-- 1 · hook: the app's own shopfront -->
+  <div class="layer" id="hero"></div>
+
+  <!-- 2 · reveal -->
+  <div class="layer woven" id="woven">
+    <div class="stitch"></div><div class="thread"></div>
+    <div class="wm" data-words>Vestiq</div>
+    <div class="tagline" data-words>The virtual fitting room for clothing shops.</div>
+  </div>
+
+  <!-- 3–8 · the tablet -->
+  <div class="layer" id="stage">
+    <div class="cap-bg"></div>
+    <div class="cap" id="cap1"><div class="cap-n" data-words>1</div><div class="cap-t" data-words>Take one photo.</div></div>
+    <div class="cap" id="cap2"><div class="cap-n" data-words>2</div><div class="cap-t" data-words>Pick from the rail.</div></div>
+    <div class="cap" id="cap3"><div class="cap-n" data-words>3</div><div class="cap-t" data-words>See it on you.</div></div>
+    <div class="cap" id="cap4"><div class="cap-t" data-words>Full outfits too.</div></div>
+    <div class="cap" id="cap5"><div class="cap-t" data-words>Keep and compare.</div></div>
+    <p class="cap-s" id="s1" data-words>Stand back. The 3-second timer does the rest.</p>
+    <p class="cap-s" id="s2" data-words>Every tag comes from the shop's own catalogue.</p>
+    <p class="cap-s" id="s3a" data-words>Your photo, wearing the piece you picked.</p>
+    <p class="cap-s" id="s3b" data-words>Drag across to compare with your photo.</p>
+    <p class="cap-s" id="s3c" data-words>Show the code. Staff bring your size.</p>
+    <p class="cap-s" id="s4" data-words>Top first, then bottoms, on the same photo.</p>
+    <p class="cap-s" id="s5" data-words>Keep the looks you like. See two side by side.</p>
+    <div class="device" id="device"><span class="cam"></span>
+      <div class="screen"><div class="scale" id="scale"></div></div>
+    </div>
+  </div>
+
+  <!-- 9 · privacy -->
+  <div class="layer woven" id="privacy">
+    <div class="stitch"></div>
+    <div class="big" data-words>Your photo is erased when you finish.</div>
+    <div class="small" data-words>Or after about two minutes without use.</div>
+  </div>
+
+  <!-- 10 · outro -->
+  <div class="layer" id="outro">
+    <div class="rail-o"></div>
+    <div class="tags-o" id="tagsO"></div>
+    <div class="wm" data-words>Vestiq</div>
+    <div class="tagline" data-words>The virtual fitting room for clothing shops.</div>
+  </div>
+</div>
+
+<script>
+/* ---------------- assets and helpers ---------------- */
+const IMG = {
+  person: '../../backend/test-images/person.png',
+  shirtResult: '../../backend/test-images/shirt_result.png',
+  outfitResult: '../../backend/test-images/complete_outfit.png',
+  shirt: '../../backend/catalog/images/dae99396700741e78d79822fa41957d7.jpg',
+  jeans: '../../backend/test-images/jeans.png',
+  navy: '../../backend/catalog/images/men-navy-shirt.jpg',
+  frock: '../../backend/catalog/images/a51b06ff57f143278564af217367c7af.jpg',
+  pants: '../../backend/catalog/images/907a8dc8b80f43a0af2f563828e089ac.jpg',
+  gingham: '../../backend/catalog/images/kids-blue-gingham-shirt.jpg',
+  chinos: '../../backend/catalog/images/men-beige-chinos.jpg',
+};
+const ICON = {
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2m-7.07-14.07 1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
+  timer: '<line x1="10" x2="14" y1="2" y2="2"/><line x1="12" x2="15" y1="14" y2="11"/><circle cx="12" cy="14" r="8"/>',
+  camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>',
+  up: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  left: '<path d="m15 18-6-6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>',
+  help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  shuffle: '<path d="m18 14 4 4-4 4"/><path d="m18 2 4 4-4 4"/><path d="M2 18h1.97a4 4 0 0 0 3.3-1.7l5.45-7.6a4 4 0 0 1 3.3-1.7H22"/><path d="M2 6h1.97a4 4 0 0 1 3.6 2.2"/><path d="M22 18h-6.04a4 4 0 0 1-3.3-1.8l-.36-.45"/>',
+  heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+  cols: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/>',
+};
+const ico = (n, s = 18, fill = 'none') => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="${fill}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON[n]}</svg>`;
+const tagBtn = (label, icon = '') => `<button class="tag-btn"><span class="tag-btn-hole"></span><span>${label}</span>${icon}</button>`;
+const fascia = (i) => `<header class="fascia"><span class="wordmark">Vestiq</span>
+  ${i === null ? '' : `<ol class="size-tabs" style="--i:${i}">${['Photo', 'Choose', 'See'].map((l, k) => `<li ${k === i ? 'aria-current="step"' : ''}><b>${k + 1}</b>${l}</li>`).join('')}</ol>`}
+  <div class="fascia-right"><span class="status live"><i></i><span>Fitting ready</span></span>
+  <button class="fascia-btn">${ico('help')}<span>Help</span></button><button class="fascia-btn">Staff</button></div></header>`;
+const hanger = (src) => `<figure class="hanger"><svg class="hanger-wire" viewBox="0 0 120 40"><path d="M60 14V9a5 5 0 1 0-5-5M60 14 8 36h104L60 14"/></svg><img src="${src}" alt=""></figure>`;
+
+const PRODUCTS = [
+  { id: 'shirt', name: 'White shirt', meta: 'Shirts, white', type: 'Top', tone: 'women', img: IMG.shirt },
+  { id: 'jeans', name: 'Blue jeans', meta: 'Jeans, blue', type: 'Bottoms', tone: 'women', img: IMG.jeans },
+  { id: 'frock', name: 'Floral frock', meta: 'Frock, beige', type: 'Full length', tone: 'women', img: IMG.frock },
+  { id: 'navy', name: 'Navy button-down shirt', meta: 'Shirts, navy', type: 'Top', tone: 'men', img: IMG.navy },
+  { id: 'chinos', name: 'Beige chinos', meta: 'Pants, beige', type: 'Bottoms', tone: 'men', img: IMG.chinos },
+  { id: 'gingham', name: 'Blue gingham shirt', meta: 'Shirts, blue', type: 'Top', tone: 'kids', img: IMG.gingham },
+];
+const rack = (outfit) => `${fascia(1)}<section class="stage rack">
+  <header class="rack-head"><div><h2 class="display">Pick something to try</h2>
+    <div class="mode-switch"><button aria-pressed="${!outfit}">One piece</button><button aria-pressed="${outfit}">Full outfit</button></div>
+    <div class="filters"><div class="dept-tabs">
+      <button class="dept tone-weave" aria-pressed="true">Everything</button><button class="dept tone-men">Men</button><button class="dept tone-women">Women</button><button class="dept tone-kids">Kids</button><button class="dept tone-foot">Footwear</button>
+    </div></div></div>
+    <figure class="hang you-tag"><div class="swing"><span class="string"></span><div class="tag tone-paper"><span class="eyelet"></span><img src="${IMG.person}" alt=""><button class="text-btn">Retake</button></div></div></figure>
+  </header>
+  ${outfit ? `<div class="hooks"><div class="hook filled"><span class="hook-label">Top</span><img src="${IMG.shirt}" alt=""><b>White shirt</b></div>
+     <div class="hook" data-hook="bottoms"><span class="hook-label">Bottoms</span><em>Pick bottoms below</em></div></div>` : ''}
+  <ul class="tag-grid">${PRODUCTS.map(p => `<li class="product" data-p="${p.id}"><div class="swing"><span class="string"></span>
+    <button class="tag product-tag tone-${p.tone}"><span class="eyelet"></span><span class="stub">${p.type}</span>
+    <span class="product-img"><img src="${p.img}" alt=""></span><span class="product-name">${p.name}</span><span class="product-meta">${p.meta}</span>
+    <span class="product-price"><b>Ask staff for price</b></span><span class="picked" style="display:none">${ico('check', 14)} ${outfit ? p.type : 'Picked'}</span></button></div></li>`).join('')}</ul>
+  <div class="rack-bar"><button class="text-btn on-dark bar-retake">${ico('left')} Retake photo</button>
+    ${outfit ? `<span class="bar-pick" data-bar>Pick a top and bottoms</span>` :
+      `<div class="cycle"><button class="round-btn">${ico('left', 20)}</button><span class="bar-pick" data-bar>Pick a piece</span><button class="round-btn">${ico('right', 20)}</button></div>`}
+    <label class="switch"><input type="checkbox"><span>Sharper result (slower)</span></label>
+    ${tagBtn(outfit ? 'Try the outfit' : 'Try it on')}</div></section>`;
+const fitting = (id) => `${fascia(2)}<section class="stage fitting"><div class="hang solo fitting-photo"><div class="swing"><span class="string"></span>
+  <div class="tag tone-paper"><span class="eyelet"></span><img src="${IMG.person}" alt=""><span class="stitch-run"></span></div></div></div>
+  <div class="fitting-copy"><h2 class="display" data-fit-h>Fitting your look</h2><p class="fitting-item" data-fit-i>White shirt</p>
+  <div class="stitch-progress"></div><p class="muted">The first try of the day takes longer while the fitting computer warms up.</p>
+  <button class="ghost-btn">${ico('left')} Stop and go back</button></div></section>`;
+const lookTag = (items) => `<aside class="hang solo look"><div class="swing"><span class="string"></span>
+  <div class="tag tone-paper look-tag perf-bottom"><span class="eyelet"></span><h2 class="display">That’s you.</h2>
+  <ul class="look-items">${items.map(i => `<li class="tone-women"><span class="dot"></span><div><b>${i.name}</b><small>${i.type}. Ask staff for price</small></div></li>`).join('')}</ul>
+  <div class="look-actions">${tagBtn('Try something else', ico('refresh'))}<button class="ghost-btn">${ico('shuffle')} New variation</button><button class="ghost-btn">${ico('heart')} Keep this look</button></div>
+  <button class="text-btn">Finish and erase my photo</button></div>
+  <div class="tear"><p class="tear-label">Show this stub to our staff. They’ll bring your size to try.</p>
+  ${items.map(i => `<div class="tear-code"><span class="barcode" role="img" style="--n:${i.code.length + 2}">*${i.code}*</span><span class="tear-name">${i.name}</span></div>`).join('')}</div></div></aside>`;
+const SHIRT = { name: 'White shirt', type: 'Top', code: 'VSC1649CF4' };
+const JEANS = { name: 'Blue jeans', type: 'Bottoms', code: 'VS2A41D7C0' };
+const result = (after, items) => `${fascia(2)}<section class="stage result"><div class="result-stage">
+  <div class="ba" style="--pos:0%"><img src="${after}" alt=""><div class="ba-before"><img src="${IMG.person}" alt=""></div>
+  <span class="ba-handle"><span>${ico('left', 16)}${ico('right', 16)}</span></span><span class="ba-chip before-chip">Your photo</span><span class="ba-chip after-chip">Preview</span></div></div>
+  ${lookTag(items)}</section>`;
+const looks = () => `${fascia(2)}<section class="stage result"><div class="result-stage">
+  <div class="compare"><figure><img src="${IMG.shirtResult}" alt=""><figcaption>White shirt</figcaption></figure>
+  <figure><img src="${IMG.outfitResult}" alt=""><figcaption>White shirt + Blue jeans</figcaption></figure></div></div>
+  ${lookTag([SHIRT, JEANS])}
+  <div class="session"><div class="session-head"><h3>Your looks <span class="count">2</span></h3><button class="ghost-btn" aria-pressed="true">${ico('cols')} Stop comparing</button></div>
+  <p class="fine">Tap another look to see it beside this one.</p>
+  <ul class="session-row">
+    <li class="look-hang vs"><div class="swing"><span class="string"></span><button class="tag tone-paper session-tag"><span class="eyelet"></span><img src="${IMG.shirtResult}" alt=""><span>White shirt</span></button></div></li>
+    <li class="look-hang on"><div class="swing"><span class="string"></span><button class="tag tone-paper session-tag"><span class="eyelet"></span><img src="${IMG.outfitResult}" alt=""><span>White shirt + Blue jeans</span>${ico('heart', 16, 'currentColor').replace('<svg', '<svg class="kept"')}</button></div></li>
+  </ul></div></section>`;
+const camera = () => `${fascia(0)}<section class="stage camera"><div class="camera-copy">
+  <h2 class="display">Step back. Fit all of you in the frame.</h2>
+  <ul class="tips"><li>${ico('check')} Face the camera with your arms slightly away from your body</li><li>${ico('check')} Feet in the frame, a little space above your head</li><li>${ico('check')} Even light from the front works best</li></ul>
+  <p class="light light-good">${ico('sun')} Light looks good</p>
+  <div class="camera-actions">${tagBtn('Take photo in 3 s', ico('timer', 20))}<button class="ghost-btn">${ico('camera')} Take it now</button></div>
+  <button class="text-btn">${ico('up')} Upload a full-length photo instead</button></div>
+  <div class="lens"><img class="feed" src="${IMG.person}" alt=""><div class="lens-guide"><span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span><span class="silhouette"></span></div>
+  <span class="countdown" id="cd">3</span><div class="flash" id="flash"></div><div class="lens-foot"><span><i></i> Live camera</span><span>Full length</span></div></div></section>`;
+
+const SCREENS = [
+  ['camera', camera(), 10.0, 17.5],
+  ['rack', rack(false), 17.5, 26.0],
+  ['fit', fitting(), 26.0, 30.5],
+  ['result', result(IMG.shirtResult, [SHIRT]), 30.5, 40.0],
+  ['rack2', rack(true), 40.0, 43.4],
+  ['fit2', fitting(), 43.4, 45.8],
+  ['result2', result(IMG.outfitResult, [SHIRT, JEANS]), 45.8, 50.0],
+  ['looks', looks(), 50.0, 54.0],
+];
+const scaleEl = document.getElementById('scale');
+for (const [id, html] of SCREENS) scaleEl.insertAdjacentHTML('beforeend', `<div class="scr" id="sc-${id}"><div class="scr-in">${html}</div><div class="tap"></div></div>`);
+
+/* hero: the app's shopfront markup */
+const HERO = [['Try', 'women', 'one photo'], ['it', 'kids', 'any piece on our rail'], ['on.', 'men', 'no trial room queue']];
+const heroTags = (cls) => HERO.map(([w, s, n], i) => `<span class="hang hero-hang h${i} ${cls}"><span class="swing"><span class="string"></span><span class="tag tone-${s}"><span class="eyelet"></span><span class="tag-word">${w}</span><span class="tag-note">${n}</span></span></span></span>`).join('');
+document.getElementById('hero').innerHTML = `${fascia(null)}<section class="shopfront"><div class="rail"></div>
+  <h1 class="hero-tags">${heroTags('hh')}</h1>
+  <div class="window-rail"><div class="tier">${hanger(IMG.shirt)}${hanger(IMG.jeans)}</div><div class="tier lower"><div class="rail"></div>${hanger(IMG.navy)}${hanger(IMG.frock)}</div></div>
+  <div class="hero-copy"><p class="lead" data-words>See our clothes on you before you queue for a trial room. Take one photo, then try anything on the rail.</p>
+  ${tagBtn('Start fitting', ico('right', 24))}<p class="fine">Takes a few minutes. Your photo is erased when you finish.</p></div></section>`;
+document.getElementById('tagsO').innerHTML = heroTags('ho');
+
+/* split every [data-words] into masked words */
+document.querySelectorAll('[data-words]').forEach(el => {
+  el.innerHTML = el.textContent.trim().split(/\s+/).map(w => `<span class="w"><span>${w}</span></span>`).join(' ');
+});
+
+/* ---------------- timing maths (all pure) ---------------- */
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const P = (t, a, b) => clamp((t - a) / (b - a));
+const eo = x => 1 - Math.pow(1 - x, 3);
+const eoe = x => (x >= 1 ? 1 : 1 - Math.pow(2, -10 * x));
+const eio = x => (x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const spring = (x, k = 5.5, w = 13) => (x <= 0 ? 0 : 1 - Math.exp(-k * x) * (Math.cos(w * x) + (k / w) * Math.sin(w * x)));
+const swing = (t, t0, amp, f = 1.25, d = 1.9) => (t < t0 ? 0 : amp * Math.exp(-d * (t - t0)) * Math.sin(2 * Math.PI * f * (t - t0)));
+const sway = (t, i, a = 1.1) => a * Math.sin(t * 2.1 + i * 1.7) * 0.6 + a * 0.4 * Math.sin(t * 3.3 + i);
+const vis = (el, o) => { el.style.opacity = o; el.style.visibility = o > 0.002 ? 'visible' : 'hidden'; };
+const words = (el, t, t0, step = 0.06, dur = 0.55) => {
+  el.querySelectorAll('.w > span').forEach((s, i) => { const x = eoe(P(t, t0 + i * step, t0 + i * step + dur)); s.style.transform = `translateY(${(1 - x) * 110}%)`; });
+};
+const layerAlpha = (t, a, b, fin = 0.35, fout = 0.3) => Math.min(eo(P(t, a, a + fin)), 1 - P(t, b - fout, b));
+
+/* measured anchor points (screen px, unscaled) */
+const S = 0.8403, DEV = { x: 602, y: 140 };
+let A = {};
+function centerIn(scrId, sel, nth = 0) {
+  const scr = document.getElementById('sc-' + scrId), el = scr.querySelectorAll(sel)[nth];
+  const r = el.getBoundingClientRect(), s = scr.getBoundingClientRect();
+  return { x: (r.left - s.left + r.width / 2) / S, y: (r.top - s.top + r.height / 2) / S, w: r.width / S, h: r.height / S };
+}
+function measure() {
+  A.capture = centerIn('camera', '.camera-actions .tag-btn');
+  A.shirt = centerIn('rack', '.product[data-p="shirt"] .product-tag');
+  A.tryBtn = centerIn('rack', '.rack-bar .tag-btn');
+  A.jeans2 = centerIn('rack2', '.product[data-p="jeans"] .product-tag');
+  A.tryBtn2 = centerIn('rack2', '.rack-bar .tag-btn');
+  A.tear = centerIn('result', '.tear');
+}
+
+function tap(scrId, pt, t, t0) {
+  const el = document.querySelector(`#sc-${scrId} .tap`);
+  const x = P(t, t0 - 0.12, t0 + 0.45);
+  if (x <= 0 || x >= 1) { el.style.visibility = 'hidden'; return; }
+  el.style.visibility = 'visible';
+  el.style.left = pt.x + 'px'; el.style.top = pt.y + 'px';
+  const press = t < t0 ? 0.75 + 0.25 * P(t, t0 - 0.12, t0) : 1 + 0.5 * eo(P(t, t0, t0 + 0.45));
+  el.style.transform = `scale(${press})`;
+  el.style.opacity = t < t0 ? P(t, t0 - 0.12, t0) : 1 - P(t, t0 + 0.1, t0 + 0.45);
+}
+function press(scrId, sel, t, t0, dur = 0.45) {
+  document.querySelector(`#sc-${scrId} ${sel}`).classList.toggle('pressed', t >= t0 && t < t0 + dur);
+}
+function swingAll(scrId, t, extra = {}) {
+  document.querySelectorAll(`#sc-${scrId} .swing`).forEach((sw, i) => {
+    const key = sw.closest('[data-p]')?.dataset.p;
+    sw.style.transform = `rotate(${sway(t, i, 0.9) + (extra[key] || 0)}deg)`;
+  });
+}
+
+/* ---------------- the timeline ---------------- */
+function renderAt(t) {
+  /* 1 · hero 0–7 */
+  const hero = document.getElementById('hero');
+  vis(hero, 1 - P(t, 6.7, 7.0));
+  if (t < 7.05) {
+    hero.querySelector('.shopfront > .rail').style.transform = `scaleX(${eoe(P(t, 0.0, 0.7))})`;
+    hero.querySelector('.shopfront > .rail').style.transformOrigin = '0 50%';
+    hero.querySelectorAll('.hh').forEach((h, i) => {
+      const t0 = 0.25 + i * 0.14, x = spring(P(t, t0, t0 + 2.2) * 2.2);
+      const lift = eio(P(t, 6.3, 6.95));
+      h.style.transform = `translateY(${(1 - x) * -130 - lift * 120}%) rotate(${[-14, 11, -8][i] * (1 - x) + swing(t, t0 + 0.6, [3, -2.5, 2][i])}deg)`;
+      h.style.transformOrigin = '50% 0';
+      h.querySelector('.swing').style.transform = `rotate(${sway(t, i, 0.7)}deg)`;
+    });
+    hero.querySelectorAll('.window-rail .hanger').forEach((g, i) => {
+      const x = eoe(P(t, 0.6 + i * 0.12, 1.7 + i * 0.12));
+      g.style.transform = `translateX(${(1 - x) * 220}px) rotate(${sway(t, i + 3, 0.6)}deg)`; g.style.opacity = x; g.style.transformOrigin = '50% 0';
+    });
+    words(hero.querySelector('.lead'), t, 2.0, 0.035);
+    const btn = hero.querySelector('.hero-copy .tag-btn'), fine = hero.querySelector('.hero-copy .fine');
+    const b = eoe(P(t, 2.7, 3.3)); btn.style.transform = `translateY(${(1 - b) * 30}px)`; btn.style.opacity = b;
+    const f = eoe(P(t, 3.0, 3.6)); fine.style.opacity = f;
+  }
+
+  /* 2 · woven reveal 7–10 */
+  const wv = document.getElementById('woven');
+  vis(wv, layerAlpha(t, 6.85, 10.05, 0.2, 0.25));
+  if (t > 6.8 && t < 10.1) {
+    const th = wv.querySelector('.thread'); th.style.transform = `scaleY(${eoe(P(t, 7.0, 7.5))})`; th.style.transformOrigin = '50% 0';
+    words(wv.querySelector('.wm'), t, 7.15, 0.05, 0.7);
+    words(wv.querySelector('.tagline'), t, 7.6, 0.05);
+  }
+
+  /* 3–8 · stage 10–54 */
+  const stage = document.getElementById('stage');
+  vis(stage, layerAlpha(t, 9.95, 54.0, 0.15, 0.25));
+  if (t > 9.9 && t < 54.05) {
+    const dev = document.getElementById('device');
+    const enter = eoe(P(t, 10.0, 10.9));
+    let s = 1, ox = 627, oy = 400;
+    // push in on the picked shirt tag, then on the barcode stub
+    const z1 = eio(P(t, 21.0, 22.4)) * (1 - eio(P(t, 24.0, 25.0)));
+    const z2 = t < 40.0 ? eio(P(t, 36.0, 37.3)) : 0;
+    let tx = 0, ty = 0;
+    if (z1 > 0) { s = 1 + 0.16 * z1; ox = 22 + A.shirt.x * S; oy = 22 + A.shirt.y * S; }
+    if (z2 > 0) { s = 1 + 0.5 * z2; ox = 22 + A.tear.x * S; oy = 22 + A.tear.y * S; tx = (1240 - 602 - ox) * z2; ty = (560 - 140 - oy) * z2; }
+    dev.style.transformOrigin = `${ox}px ${oy}px`;
+    dev.style.transform = `translate(${tx}px, ${(1 - enter) * 240 + ty}px) scale(${s})`;
+    dev.style.opacity = enter;
+
+    for (const [id, , a, b] of SCREENS) {
+      const el = document.getElementById('sc-' + id);
+      const o = layerAlpha(t, a, b, 0.32, 0.22);
+      vis(el, o);
+      el.style.transform = `translateY(${(1 - eo(P(t, a, a + 0.4))) * 26}px)`;
+    }
+
+    // captions
+    const caps = [['cap1', 10.4, 17.35], ['cap2', 17.8, 25.85], ['cap3', 26.3, 39.85], ['cap4', 40.3, 49.85], ['cap5', 50.3, 53.85]];
+    for (const [id, a, b] of caps) { const el = document.getElementById(id); vis(el, 1 - P(t, b - 0.25, b)); el.querySelectorAll('[data-words]').forEach((w, k) => words(w, t, a + k * 0.12, 0.06, 0.6)); }
+    const subs = [['s1', 11.0, 17.35], ['s2', 18.5, 25.85], ['s3a', 26.9, 30.4], ['s3b', 31.4, 35.9], ['s3c', 36.2, 39.85], ['s4', 40.9, 49.85], ['s5', 50.8, 53.85]];
+    for (const [id, a, b] of subs) {
+      const el = document.getElementById(id); const capTop = (id === 's4' || id === 's5') ? 500 : 640;
+      el.style.top = capTop + 'px'; vis(el, Math.min(eo(P(t, a, a + 0.3)), 1 - P(t, b - 0.25, b))); words(el, t, a, 0.04, 0.5);
+    }
+
+    /* camera 10–17.5 */
+    if (t < 17.6) {
+      tap('camera', A.capture, t, 11.8); press('camera', '.camera-actions .tag-btn', t, 11.8);
+      const cd = document.getElementById('cd');
+      const n = t >= 12 && t < 15 ? 3 - Math.floor(t - 12) : 0;
+      if (n) { const k = (t - 12) % 1; cd.textContent = n; cd.style.visibility = 'visible'; cd.style.opacity = Math.min(eo(clamp(k / 0.18)), 1 - P(k, 0.7, 1)); cd.style.transform = `scale(${1.45 - 0.45 * eoe(clamp(k / 0.35))})`; }
+      else cd.style.visibility = 'hidden';
+      document.getElementById('flash').style.opacity = t >= 15 ? Math.max(0, 1 - (t - 15) / 0.35) : 0;
+      const feed = document.querySelector('#sc-camera .feed');
+      feed.style.transform = `scaleX(-1) scale(${t < 15 ? 1 + 0.006 * Math.sin(t * 2.2) : 1.03})`;
+    }
+
+    /* rack 17.5–26 */
+    if (t > 17.4 && t < 26.1) {
+      document.querySelectorAll('#sc-rack .product').forEach((li, i) => {
+        const t0 = 17.65 + i * 0.09, x = spring(P(t, t0, t0 + 2) * 2);
+        li.style.transform = `translateY(${(1 - x) * -60}px)`; li.style.opacity = eo(P(t, t0, t0 + 0.25));
+      });
+      const on = t >= 20.0;
+      const li = document.querySelector('#sc-rack .product[data-p="shirt"]');
+      li.classList.toggle('on', on); li.querySelector('.picked').style.display = on ? '' : 'none';
+      swingAll('rack', t, { shirt: swing(t, 20.0, 5.5) });
+      tap('rack', A.shirt, t, 20.0);
+      document.querySelector('#sc-rack [data-bar]').innerHTML = on ? 'White shirt<small>Ask staff for price</small>' : 'Pick a piece';
+      tap('rack', A.tryBtn, t, 25.4); press('rack', '.rack-bar .tag-btn', t, 25.4);
+    }
+
+    /* fitting */
+    for (const [id, a, b] of [['fit', 26.0, 30.5], ['fit2', 43.4, 45.8]]) {
+      if (t < a - 0.1 || t > b + 0.1) continue;
+      const scr = document.getElementById('sc-' + id);
+      const run = scr.querySelector('.stitch-run'); const ph = 0.5 - 0.5 * Math.cos((t - a) * 2.4);
+      run.style.top = `calc(42px + ${ph} * (100% - 59px))`;
+      scr.querySelector('.stitch-progress').style.backgroundPosition = `${((t - a) * 34) % 20}px 0`;
+      scr.querySelector('.solo').style.transform = `translateY(${(1 - spring(P(t, a, a + 1.6) * 1.6)) * -14}%)`;
+      if (id === 'fit2') {
+        const second = t >= 44.6;
+        scr.querySelector('[data-fit-h]').textContent = second ? 'Fitting piece 2 of 2' : 'Fitting piece 1 of 2';
+        scr.querySelector('[data-fit-i]').textContent = second ? 'Blue jeans' : 'White shirt';
+      }
+    }
+
+    /* results */
+    for (const [id, a, peekA, peekB] of [['result', 30.5, 32.0, 34.4], ['result2', 45.8, 47.0, 48.4]]) {
+      const scr = document.getElementById('sc-' + id);
+      const ba = scr.querySelector('.ba');
+      const u = eio(P(t, a + 0.1, a + 1.2));
+      ba.style.clipPath = `inset(0 0 ${(1 - u) * 100}% 0)`;
+      const peek = eio(P(t, peekA, peekA + 1.2)) * (1 - eio(P(t, peekB, peekB + 1.0)));
+      ba.style.setProperty('--pos', `${peek * 62}%`);
+      const look = scr.querySelector('.look');
+      look.style.transformOrigin = '50% 0';
+      look.style.transform = `translateY(${(1 - spring(P(t, a + 0.3, a + 2.2) * 1.9)) * -16}%) rotate(${swing(t, a + 0.9, 1.6)}deg)`;
+    }
+
+    /* outfit rack 40–43.4 */
+    if (t > 39.9 && t < 43.5) {
+      const on = t >= 41.2;
+      const sh = document.querySelector('#sc-rack2 .product[data-p="shirt"]'); sh.classList.add('on'); sh.querySelector('.picked').style.display = '';
+      const jn = document.querySelector('#sc-rack2 .product[data-p="jeans"]'); jn.classList.toggle('on', on); jn.querySelector('.picked').style.display = on ? '' : 'none';
+      const hook = document.querySelector('#sc-rack2 [data-hook="bottoms"]');
+      hook.classList.toggle('filled', on);
+      hook.innerHTML = on ? `<span class="hook-label">Bottoms</span><img src="${IMG.jeans}" alt=""><b>Blue jeans</b>` : `<span class="hook-label">Bottoms</span><em>Pick bottoms below</em>`;
+      document.querySelector('#sc-rack2 [data-bar]').innerHTML = on ? 'White shirt + Blue jeans<small>Ask staff for price</small>' : 'Pick a top and bottoms';
+      swingAll('rack2', t, { jeans: swing(t, 41.2, 5.5) });
+      tap('rack2', A.jeans2, t, 41.2);
+      tap('rack2', A.tryBtn2, t, 42.7); press('rack2', '.rack-bar .tag-btn', t, 42.7);
+    }
+
+    /* looks 50–54: scroll down to the looks rail */
+    if (t > 49.9) {
+      const inner = document.querySelector('#sc-looks .scr-in');
+      inner.style.transform = `translateY(${-eio(P(t, 51.6, 52.6)) * 300}px)`;
+      swingAll('looks', t);
+    }
+  }
+
+  /* 9 · privacy 54–57.5 */
+  const pv = document.getElementById('privacy');
+  vis(pv, layerAlpha(t, 53.95, 57.55, 0.2, 0.25));
+  if (t > 53.9 && t < 57.6) { words(pv.querySelector('.big'), t, 54.2, 0.07, 0.6); words(pv.querySelector('.small'), t, 55.1, 0.05); }
+
+  /* 10 · outro 57.5–62 */
+  const ou = document.getElementById('outro');
+  vis(ou, eo(P(t, 57.45, 57.75)));
+  if (t > 57.4) {
+    ou.querySelector('.rail-o').style.transform = `scaleX(${eoe(P(t, 57.55, 58.2))})`;
+    ou.querySelectorAll('.ho').forEach((h, i) => {
+      const t0 = 57.75 + i * 0.13, x = spring(P(t, t0, t0 + 2.2) * 2.2);
+      h.style.transformOrigin = '50% 0';
+      h.style.transform = `translateY(${(1 - x) * -130}%) rotate(${[-12, 10, -7][i] * (1 - x) + swing(t, t0 + 0.6, [2.4, -2, 1.6][i])}deg)`;
+      h.querySelector('.swing').style.transform = `rotate(${sway(t, i, 0.5)}deg)`;
+    });
+    words(ou.querySelector('.wm'), t, 59.0, 0.05, 0.7);
+    words(ou.querySelector('.tagline'), t, 59.35, 0.04);
+  }
+}
+
+window.ready = (async () => {
+  await document.fonts.ready;
+  await Promise.all([...document.images].map(i => i.complete ? 1 : new Promise(r => { i.onload = i.onerror = r; })));
+  document.querySelectorAll('.scr').forEach(s => { s.style.visibility = 'visible'; });
+  measure();
+  document.querySelectorAll('.scr').forEach(s => { s.style.visibility = 'hidden'; });
+  renderAt(0);
+  return true;
+})();
+window.renderAt = renderAt;
+</script>
+</body>
+</html>

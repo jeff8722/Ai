@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ArrowLeft, ImagePlus, Lock, Trash2 } from 'lucide-react';
 import { API, TYPE_LABEL, TagButton, imageUrl, priceLabel, tone, useObjectUrl } from './ui';
+import { isSaree } from './size';
 
 const EMPTY = { name: '', department: 'women', category: '', color: '', price: '', description: '', tryon: '' };
 
@@ -136,14 +137,14 @@ export default function Admin({ catalog, reload, health, pin, setPin, onExit }) 
                 <option value="">Guess from category</option>
                 <option value="tops">Top (shirt, blouse, jacket)</option>
                 <option value="bottoms">Bottoms (pants, skirt, shorts)</option>
-                <option value="one-pieces">Full length (dress, frock, kurta)</option>
+                <option value="one-pieces">Full length (dress, frock, kurta, saree)</option>
               </select>
             </label>
           </div>
           <div className="field-row">
             <label className="field">
               <span>Category</span>
-              <input required value={form.category} onChange={set('category')} placeholder="Shirts" />
+              <input required value={form.category} onChange={set('category')} placeholder="Shirts, Sarees" />
             </label>
             <label className="field">
               <span>Colour</span>
@@ -161,7 +162,11 @@ export default function Admin({ catalog, reload, health, pin, setPin, onExit }) 
           <label className="drop" htmlFor="staff-image">
             {preview ? <img src={preview} alt="Selected product photo" /> : <ImagePlus size={28} aria-hidden="true" />}
             <b>{image ? image.name : 'Choose product photo'}</b>
-            <small>One garment, whole and flat, on a plain background. JPG, PNG or WEBP up to 20 MB.</small>
+            <small>
+              {isSaree({ category: form.category, name: form.name })
+                ? 'Saree: use a photo of it draped on a model or mannequin, front facing, whole drape in view. A folded saree will not work. JPG, PNG or WEBP up to 20 MB.'
+                : 'One garment, whole and flat, on a plain background. JPG, PNG or WEBP up to 20 MB.'}
+            </small>
             <input id="staff-image" type="file" accept="image/jpeg,image/png,image/webp" onChange={e => setImage(e.target.files?.[0] || null)} />
           </label>
           <TagButton label={saving ? 'Adding…' : 'Add to the rail'} type="submit" disabled={saving} />
