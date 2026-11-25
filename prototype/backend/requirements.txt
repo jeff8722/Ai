@@ -1,0 +1,6 @@
+# Install PyTorch (CUDA build) and the model first; see ../README.md.
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+python-multipart==0.0.20
+pillow==11.2.1
+httpx==0.28.1  # only for test_app.py
